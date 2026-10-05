@@ -8,7 +8,10 @@
     "build": "tsc -b && vite build",
     "test": "vitest",
     "e2e": "playwright test",
-    "typecheck": "tsc -b --noEmit"
+    "typecheck": "tsc -b --noEmit",
+    "sim:dev-data": "tsx src/sim/dev/buildDevData.ts",
+    "sim:report": "tsx src/sim/dev/report.ts",
+    "sim:export-world": "tsx src/sim/dev/exportWorld.ts"
   },
   "dependencies": {
     "@deck.gl/aggregation-layers": "9.4.0",

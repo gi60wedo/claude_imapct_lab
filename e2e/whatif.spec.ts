@@ -1,16 +1,13 @@
 import { expect, test } from '@playwright/test';
 
 test('what-if scenarios update compare and handle offline scenario', async ({ page }) => {
-  await page.goto('/');
+  await page.goto('/?data=fixtures');
   const compareBtn = page.getByRole('button', { name: 'Compare', exact: true });
   await expect(compareBtn).toBeEnabled();
   await expect(page.getByRole('button', { name: 'Sunny' })).toHaveAttribute('aria-pressed', 'true');
-  await expect.poll(async () => {
-    await compareBtn.click();
-    const shown = await page.getByTestId('compare').isVisible();
-    if (!shown) await compareBtn.click();
-    return shown;
-  }).toBeTruthy();
+  await expect(page.getByRole('button', { name: 'Rainy' })).toBeEnabled({ timeout: 20_000 });
+  await compareBtn.click();
+  await expect(page.getByTestId('compare')).toBeVisible();
 
   const compare = page.getByTestId('compare');
   const read = async () => (await compare.locator('td[data-testid^="cmp-"]').allInnerTexts()).join('|');

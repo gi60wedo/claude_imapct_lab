@@ -1,4 +1,4 @@
-// DRAFT until contract freeze
+// Shared types, frozen at 13:20 (IMPLEMENTATION_PLAN.md §5). Change only with the whole team.
 
 export type SiteKind = 'square' | 'pedestrian' | 'ground_floor' | 'benchmark';
 export type Scenario = 'SUNNY_SAT' | 'RAINY_SAT' | 'CHRISTMAS_MARKET';

@@ -1,9 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import type { Candidate, Brief, SimulationResult, Bottleneck, PersonaId } from '../../contracts';
+import { buildFootwayGraph, generateTripPath, mulberry32 } from './gen';
 
 // Import fixture JSON files
 import candidatesData from '../../../public/data/fixtures/candidates.json';
 import briefData from '../../../public/data/fixtures/brief.json';
+import footways from '../../../public/base/footways.json';
 import resultHAUPTMARKT_SUNNY from '../../../public/data/fixtures/result-HAUPTMARKT-SUNNY_SAT.json';
 import resultHAUPTMARKT_RAINY from '../../../public/data/fixtures/result-HAUPTMARKT-RAINY_SAT.json';
 import resultLORENZKIRCHE_SUNNY from '../../../public/data/fixtures/result-LORENZKIRCHE-SUNNY_SAT.json';
@@ -19,6 +21,15 @@ import resultRATHHAUS_PLATZ_RAINY from '../../../public/data/fixtures/result-RAT
 
 const candidates = candidatesData as unknown as Candidate[];
 const brief = briefData as unknown as Brief;
+
+function distanceM(a: number[], b: number[]): number {
+  const radians = Math.PI / 180;
+  const dLat = (b[1] - a[1]) * radians;
+  const dLng = (b[0] - a[0]) * radians;
+  const h = Math.sin(dLat / 2) ** 2
+    + Math.cos(a[1] * radians) * Math.cos(b[1] * radians) * Math.sin(dLng / 2) ** 2;
+  return 6371000 * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
+}
 
 const results: SimulationResult[] = [
   resultHAUPTMARKT_SUNNY,
@@ -36,6 +47,48 @@ const results: SimulationResult[] = [
 ] as unknown as SimulationResult[];
 
 describe('Fixtures', () => {
+  describe('Trip generator', () => {
+    it('should join endpoints within 2 metres and stay on connected edges', () => {
+      const graph = buildFootwayGraph([
+        [[11, 49], [11.001, 49]],
+        [[11.001, 49.00001], [11.001, 49.001]],
+        // This nearby edge belongs to a separate component.
+        [[11, 49.0001], [11.0008, 49.0001]],
+      ]);
+      expect(graph).toHaveLength(5);
+      expect(graph[1].neighbors).toEqual([0, 2]);
+      const path = generateTripPath(mulberry32(42), [11, 49.00001], graph, 240);
+      expect(path[0]).toEqual([11, 49]);
+      expect(path).toHaveLength(9);
+      expect(path).toContainEqual([11.001, 49]);
+      expect(path.some((point) => point[1] > 49.0001)).toBe(true);
+      path.forEach((point, i) => {
+        expect(Math.abs(point[1] - 49) < 1e-10 || Math.abs(point[0] - 11.001) < 1e-10).toBe(true);
+        if (i > 0) expect(distanceM(path[i - 1], point)).toBeLessThanOrEqual(60);
+      });
+    });
+
+    it('should keep endpoints more than 2 metres apart disconnected', () => {
+      const graph = buildFootwayGraph([
+        [[11, 49], [11.001, 49]],
+        [[11.001, 49.00003], [11.001, 49.001]],
+      ]);
+      expect(graph).toHaveLength(4);
+      expect(graph[1].neighbors).toEqual([0]);
+      expect(graph[2].neighbors).toEqual([3]);
+    });
+
+    it('should produce identical random walks with seed 42', () => {
+      const graph = buildFootwayGraph(footways as [number, number][][]);
+      const start = candidates[0].polygon[0];
+      const generate = () => {
+        const rng = mulberry32(42);
+        return Array.from({ length: 10 }, () => generateTripPath(rng, start, graph, 1200));
+      };
+      expect(generate()).toEqual(generate());
+    });
+  });
+
   describe('Candidates', () => {
     it('should have 18 candidates', () => {
       expect(candidates).toHaveLength(18);
@@ -44,6 +97,18 @@ describe('Fixtures', () => {
     it('should have exactly 6 passing candidates', () => {
       const passing = candidates.filter((c) => c.passedFilter);
       expect(passing).toHaveLength(6);
+      expect(passing.map((c) => c.id)).toEqual([
+        'HAUPTMARKT', 'LORENZKIRCHE', 'KAUFHOF', 'KORNMARKT', 'LUDWIGS_PLATZ', 'RATHHAUS_PLATZ',
+      ]);
+    });
+
+    it('should preserve all candidate ids', () => {
+      expect(candidates.map((c) => c.id)).toEqual([
+        'HAUPTMARKT', 'LORENZKIRCHE', 'KAUFHOF', 'HALLERWIESE', 'TUCHER_SCHLOSS_PLATZ',
+        'KORNMARKT', 'LUDWIGS_PLATZ', 'RATHHAUS_PLATZ', 'MAXTORPLATZ', 'NASSAUER_PLATZ',
+        'WEISSER_TURM', 'UNSCHLITT_PLATZ', 'ADLERPLATZ', 'BURGSTRASSE', 'KAISERBURG_HOF',
+        'FRANGASSE', 'PLARRERPLATZ', 'FRAUENPLATZ',
+      ]);
     });
 
     it('should have exactly 12 rejected candidates with rejectReason', () => {
@@ -55,16 +120,34 @@ describe('Fixtures', () => {
       });
     });
 
-    it('should use all 3 reject reasons at least twice', () => {
+    it('should preserve four rejections for each reason', () => {
       const rejected = candidates.filter((c) => !c.passedFilter);
       const reasons = rejected.map((c) => c.rejectReason);
       const reasonCounts: Record<string, number> = {};
       reasons.forEach((r) => {
         reasonCounts[r!] = (reasonCounts[r!] || 0) + 1;
       });
-      expect(Object.keys(reasonCounts)).toHaveLength(3);
-      Object.values(reasonCounts).forEach((count) => {
-        expect(count).toBeGreaterThanOrEqual(2);
+      expect(reasonCounts).toEqual({
+        'area < 800 m²': 4,
+        'no stop within 400 m': 4,
+        'no van route within 80 m': 4,
+      });
+    });
+
+    it('should have indicators consistent with each rejection reason', () => {
+      candidates.filter((c) => !c.passedFilter).forEach((candidate) => {
+        switch (candidate.rejectReason) {
+          case 'area < 800 m²':
+            expect(candidate.areaM2, candidate.id).toBeLessThan(800);
+            break;
+          case 'no stop within 400 m':
+            expect(candidate.indicators.transitScore, candidate.id).toBeLessThan(40);
+            break;
+          case 'no van route within 80 m':
+            expect(candidate.indicators.deliveryAccess, candidate.id).toBe(false);
+            expect(candidate.indicators.vanDistM, candidate.id).toBeGreaterThan(80);
+            break;
+        }
       });
     });
 
@@ -136,6 +219,32 @@ describe('Fixtures', () => {
       results.forEach((r) => {
         expect(r.trips.length).toBeGreaterThanOrEqual(100);
       });
+    });
+
+    it('should snap every trip start to a footway vertex', () => {
+      const vertices = footways.flat();
+      const starts = new Map<string, number[]>();
+      results.forEach((result) => result.trips.forEach((trip) => {
+        const start = trip.path[0];
+        starts.set(`${start[0]},${start[1]}`, start);
+      }));
+      starts.forEach((start) => {
+        expect(vertices.some((vertex) => distanceM(start, vertex) < 0.01)).toBe(true);
+      });
+    });
+
+    it('should keep every consecutive trip point within 60 metres', () => {
+      results.forEach((result) => result.trips.forEach((trip, tripIndex) => {
+        expect(trip.path.length).toBeGreaterThan(1);
+        for (let i = 1; i < trip.path.length; i++) {
+          const label = `${result.candidateId}/${result.scenario} trip ${tripIndex}, step ${i}`;
+          expect(distanceM(trip.path[i - 1], trip.path[i]), label).toBeLessThanOrEqual(60);
+        }
+      }));
+    });
+
+    it('should use seed 42 for every result', () => {
+      results.forEach((result) => expect(result.seed).toBe(42));
     });
 
     it('should have trips with valid path format [lng, lat, tSec]', () => {

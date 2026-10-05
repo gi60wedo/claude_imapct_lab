@@ -5,9 +5,16 @@ const baseURL = `http://127.0.0.1:${port}`;
 
 export default defineConfig({
   testDir: './e2e',
+  workers: 1, // timing specs (ranking, perf) are unreliable under parallel load
   use: { baseURL },
-  // Use the real GPU through ANGLE/Vulkan; the default SwiftShader software renderer cannot hold the scene frame budget.
-  projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'], launchOptions: { args: ['--use-angle=vulkan', '--enable-features=Vulkan', '--ignore-gpu-blocklist'] } } }],
+  projects: [{
+    name: 'chromium',
+    use: {
+      ...devices['Desktop Chrome'],
+      // Headless Chromium falls back to software WebGL (~1 fps); force the GPU for deck.gl specs.
+      launchOptions: { args: ['--enable-gpu', '--ignore-gpu-blocklist', '--use-angle=vulkan', '--enable-features=Vulkan'] },
+    },
+  }],
   webServer: {
     command: 'npx vite --port $PORT --strictPort',
     env: { PORT: port },

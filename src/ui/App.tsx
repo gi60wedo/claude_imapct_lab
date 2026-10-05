@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 import Cockpit from './cockpit/Cockpit';
-import MapView from './map/MapView';
+import SimOverlay from './controls/SimOverlay';
 import RankingPanel from './ranking/RankingPanel';
 import WhatIfBar from './whatif/WhatIfBar';
 import { briefClient, sim } from './adapters';
@@ -27,7 +27,7 @@ export default function App() {
         <h1 className="text-lg font-semibold">UrbanTwin · Market-Sim</h1>
         <div className="flex-1" data-slot="whatif"><WhatIfBar /></div>
       </header>
-      <main className="relative min-h-0" data-slot="map"><MapView /></main>
+      <main className="relative min-h-0" data-slot="map"><SimOverlay /></main>
       <aside className="row-span-2 min-h-0 overflow-y-auto border-l border-border" data-slot="side">
         <section data-slot="ranking"><RankingPanel /></section>
         <section data-slot="cockpit"><Cockpit /></section>
