@@ -1,5 +1,6 @@
 // Street network from the walking graph, draped on the terrain. Two layers share one fetch:
-// - roads: flat grey ribbons, always drawn, metres wide by road class (major roads widest);
+// - roads: lit grey ribbons, always drawn, metres wide by road class (major roads widest), asphalt
+//   on vehicle roads and lighter paving on pedestrian ways and plazas;
 // - overlay: thin lines in greys by surface (sett lighter and dashed, asphalt darker), behind the
 //   Streets toggle.
 // Source: public/data/graph.json (nodes [{lng, lat, z}], edges [{a, b, len, slope, surface, foot, hw}])
@@ -7,7 +8,7 @@
 import { Color } from 'three';
 import { assetUrl, type CityModel } from './city';
 import { project, sampleElevation, type LngLat } from './geometry';
-import { ROAD_ORDER, roadClass, ROADS, SURFACES, surfaceClass, type SurfaceClassId } from './style';
+import { ASPHALT_ROADS, ROAD_ORDER, roadClass, ROADS, SURFACES, surfaceClass, type SurfaceClassId } from './style';
 
 interface GraphNode { lng: number; lat: number }
 interface GraphEdge {
@@ -36,6 +37,8 @@ export interface RoadMesh {
   /** Indexed triangle strip per edge, world axes, y = terrain elevation. */
   positions: Float32Array;
   colors: Float32Array;
+  /** 1 for paved pedestrian ways and plazas (sett pattern), 0 for asphalt roads, per vertex. */
+  paved: Float32Array;
   index: Uint32Array;
 }
 
@@ -113,9 +116,10 @@ export function buildRoads(city: CityModel, graph: WalkGraph): RoadMesh {
     const cls = roadClass(edge.hw, edge.vehicleAllowed ?? edge.vehicle);
     if (cls) byClass[ROAD_ORDER.indexOf(cls)].edges.push(edge);
   }
-  const positions: number[] = [], colors: number[] = [], index: number[] = [];
+  const positions: number[] = [], colors: number[] = [], paved: number[] = [], index: number[] = [];
   for (const { id, edges } of byClass) {
     const { width, color: hex } = ROADS[id];
+    const isPaved = ASPHALT_ROADS.includes(id) ? 0 : 1;
     const color = new Color(hex);
     const half = width / 2;
     for (const edge of edges) {
@@ -133,6 +137,7 @@ export function buildRoads(city: CityModel, graph: WalkGraph): RoadMesh {
         const e = east + ue * extend, n = north + un * extend;
         positions.push(e + pe, y, -(n + pn), e - pe, y, -(n - pn));
         colors.push(color.r, color.g, color.b, color.r, color.g, color.b);
+        paved.push(isPaved, isPaved);
       });
       for (let k = 0; k < points.length - 1; k++) {
         const i = base + k * 2;
@@ -140,7 +145,10 @@ export function buildRoads(city: CityModel, graph: WalkGraph): RoadMesh {
       }
     }
   }
-  return { positions: new Float32Array(positions), colors: new Float32Array(colors), index: new Uint32Array(index) };
+  return {
+    positions: new Float32Array(positions), colors: new Float32Array(colors), paved: new Float32Array(paved),
+    index: new Uint32Array(index),
+  };
 }
 
 async function fetchGraph(url: string): Promise<WalkGraph | null> {

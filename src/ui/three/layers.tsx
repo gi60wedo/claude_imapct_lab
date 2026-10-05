@@ -1,13 +1,14 @@
 // Per-frame scene layers on top of the static city: candidate outlines, agent dots, heat,
-// bottlenecks and stalls. Everything but the agent dots is white or grey. Every size, intensity
+// bottlenecks and stalls. Everything but the agent dots and the heat glow is white or grey. Every size, intensity
 // and count derives from the props; nothing is typed in. `lift` is the vertical exaggeration
 // shared with the terrain and building bases.
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useFrame, useThree, type ThreeEvent } from '@react-three/fiber';
 import {
-  AdditiveBlending, BoxGeometry, BufferGeometry, CanvasTexture, Color, CylinderGeometry, DoubleSide, DynamicDrawUsage,
-  Float32BufferAttribute, GreaterDepth, type Group, InstancedBufferAttribute, InstancedBufferGeometry, type InstancedMesh,
-  type Mesh, MeshBasicMaterial, Object3D, PlaneGeometry, RingGeometry, ShaderMaterial, ShapeGeometry, SphereGeometry, Vector2,
+  AdditiveBlending, BoxGeometry, BufferGeometry, ClampToEdgeWrapping, Color, CylinderGeometry, DataTexture, DoubleSide,
+  DynamicDrawUsage, Float32BufferAttribute, GreaterDepth, type Group, InstancedBufferAttribute, InstancedBufferGeometry,
+  type InstancedMesh, LinearFilter, type Mesh, MeshBasicMaterial, Object3D, PlaneGeometry, RedFormat, RingGeometry,
+  ShaderMaterial, ShapeGeometry, SphereGeometry, UnsignedByteType, Vector2,
 } from 'three';
 import { Line2 } from 'three/addons/lines/Line2.js';
 import { LineGeometry } from 'three/addons/lines/LineGeometry.js';
@@ -18,7 +19,8 @@ import {
   footprintShape, openRing, project, ringCenter, sampleElevation, samplePacked,
   stallGrid, trailLength, toWorld, unproject, type LngLat,
 } from './geometry';
-import { AGENT_WHITE, MAP, PERSONA_COLORS, type AgentColors } from './style';
+import { heatField, type HeatField, type HeatPoint } from './heat';
+import { AGENT_WHITE, DOT, HEAT_RAMP, MAP, PERSONA_COLORS, type AgentColors } from './style';
 
 export const ground = (city: CityModel, [lng, lat]: LngLat, lift: number) => sampleElevation(lng, lat, city.raster) * lift;
 
@@ -128,10 +130,10 @@ export function Candidates({ city, candidates, selectedId, lift, onSelect }: {
 /** Sim seconds between trail points. */
 const TRAIL_STEP_S = 5;
 /** Dot diameters in CSS pixels: the head, and the last trail point. Constant on screen. */
-const HEAD_PX = 7;
-const TAIL_PX = 2.5;
+const HEAD_PX = DOT.headPx;
+const TAIL_PX = DOT.tailPx;
 /** Opacity of the dot parts hidden behind buildings, drawn as a faint x-ray. */
-const OCCLUDED_OPACITY = 0.3;
+const OCCLUDED_OPACITY = 0.35;
 /** Dots float this far above the terrain. */
 const DOT_LIFT_M = 1.6;
 
@@ -146,7 +148,8 @@ function packPath(city: CityModel, path: [number, number, number][], lift: numbe
 }
 
 // One camera-facing quad per instance, offset in clip space so the dot keeps its pixel size at
-// any distance. `position` is the quad corner in [-1, 1].
+// any distance. `position` is the quad corner in [-1, 1]; the quad spans the glow, DOT.glow times
+// the core. aSize is the core diameter in CSS pixels.
 const DOT_VERTEX = /* glsl */ `
 attribute vec3 aCenter;
 attribute vec3 aColor;
@@ -157,29 +160,38 @@ uniform float uPixelRatio;
 varying vec3 vColor;
 varying float vAlpha;
 varying vec2 vCorner;
+varying float vEdge;
 #include <clipping_planes_pars_vertex>
 void main() {
   vColor = aColor;
   vAlpha = aAlpha;
-  vCorner = position.xy;
+  vCorner = position.xy * ${DOT.glow.toFixed(2)};
+  // One device pixel in core radii, for an anti-aliased rim.
+  vEdge = 2.0 / max(aSize * uPixelRatio, 1.0);
   vec4 mvPosition = modelViewMatrix * vec4(aCenter, 1.0);
   vec4 clip = projectionMatrix * mvPosition;
-  clip.xy += position.xy * aSize * uPixelRatio / uResolution * clip.w;
+  clip.xy += position.xy * ${DOT.glow.toFixed(2)} * aSize * uPixelRatio / uResolution * clip.w;
   gl_Position = clip;
   #include <clipping_planes_vertex>
 }`;
 
+// A solid core with a crisp rim, a little brighter than the persona colour, inside a soft halo.
 const DOT_FRAGMENT = /* glsl */ `
 uniform float uOpacity;
 varying vec3 vColor;
 varying float vAlpha;
 varying vec2 vCorner;
+varying float vEdge;
 #include <clipping_planes_pars_fragment>
 void main() {
   #include <clipping_planes_fragment>
-  float r = dot(vCorner, vCorner);
-  if (r > 1.0) discard;
-  gl_FragColor = vec4(vColor, vAlpha * uOpacity * (1.0 - smoothstep(0.5, 1.0, r)));
+  float d = length(vCorner);
+  if (d > ${DOT.glow.toFixed(2)}) discard;
+  float core = 1.0 - smoothstep(1.0 - vEdge, 1.0 + vEdge, d);
+  float halo = 0.38 * exp(-2.2 * max(d - 0.85, 0.0) * max(d - 0.85, 0.0)) * (1.0 - smoothstep(${(DOT.glow * 0.7).toFixed(2)}, ${DOT.glow.toFixed(2)}, d));
+  vec3 bright = min(vColor * 1.3 + 0.06, vec3(1.0));
+  float alpha = max(core, halo);
+  gl_FragColor = vec4(mix(vColor, bright, core), alpha * vAlpha * uOpacity);
   #include <colorspace_fragment>
 }`;
 
@@ -243,7 +255,7 @@ export function Trips({ city, trips, timeSec, lift, colors, onCount }: {
   /** Size and opacity per trail step: the head first, then smaller and fainter. */
   const steps = useMemo(() => Array.from({ length: trail }, (_, k) => {
     const f = trail > 1 ? k / (trail - 1) : 0;
-    return k === 0 ? { size: HEAD_PX, alpha: 1 } : { size: HEAD_PX * 0.62 + (TAIL_PX - HEAD_PX * 0.62) * f, alpha: 0.55 * (1 - f) ** 1.4 + 0.06 };
+    return k === 0 ? { size: HEAD_PX, alpha: 1 } : { size: HEAD_PX * 0.6 + (TAIL_PX - HEAD_PX * 0.6) * f, alpha: 0.5 * (1 - f) ** 1.4 + 0.06 };
   }), [trail]);
   const point = useMemo(() => new Float32Array(3), []);
   const buffer = useMemo(() => new Vector2(), []);
@@ -288,96 +300,128 @@ export function Trips({ city, trips, timeSec, lift, colors, onCount }: {
   );
 }
 
-let glowTexture: CanvasTexture | null = null;
-/** Radial falloff sprite drawn once with a gradient: deterministic, no image asset. */
-function radialGlow() {
-  if (glowTexture) return glowTexture;
-  const canvas = document.createElement('canvas');
-  canvas.width = canvas.height = 128;
-  const context = canvas.getContext('2d')!;
-  const gradient = context.createRadialGradient(64, 64, 0, 64, 64, 64);
-  gradient.addColorStop(0, 'rgba(255,255,255,1)');
-  gradient.addColorStop(0.35, 'rgba(255,255,255,0.45)');
-  gradient.addColorStop(1, 'rgba(255,255,255,0)');
-  context.fillStyle = gradient;
-  context.fillRect(0, 0, 128, 128);
-  glowTexture = new CanvasTexture(canvas);
-  return glowTexture;
-}
-
-type HeatPoint = [number, number, number];
 /** Seconds a heat layer takes to fade in or out when the slice or the toggle changes. */
 const HEAT_FADE_S = 0.6;
+/** The heat drape floats this far above the terrain, over the road ribbons. */
+const HEAT_LIFT_M = 1.1;
+/** Drape vertex spacing, metres: fine enough to follow the terrain between raster samples. */
+const HEAT_MESH_M = 8;
+
+// Heat field texture → transparent at zero, amber, red at the reference and above. Additive, so
+// it glows over the dark ground; buildings hide it where they stand.
+const HEAT_VERTEX = /* glsl */ `
+varying vec2 vUv;
+#include <clipping_planes_pars_vertex>
+void main() {
+  vUv = uv;
+  vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+  gl_Position = projectionMatrix * mvPosition;
+  #include <clipping_planes_vertex>
+}`;
+
+const HEAT_FRAGMENT = /* glsl */ `
+uniform sampler2D uField;
+uniform vec2 uSize;
+uniform vec3 uAmber;
+uniform vec3 uRed;
+uniform float uOpacity;
+varying vec2 vUv;
+#include <clipping_planes_pars_fragment>
+void main() {
+  #include <clipping_planes_fragment>
+  // Texel centres sit on the drape's corners: (0, 0) at uv 0, (w − 1, h − 1) at uv 1.
+  float t = texture2D(uField, (vUv * (uSize - 1.0) + 0.5) / uSize).r;
+  // Quiet streets stay dark; only crowding glows, so the agent dots keep the colour.
+  float alpha = smoothstep(0.08, 0.75, t) * 0.7;
+  vec3 color = mix(uAmber * 0.6, uAmber, smoothstep(0.25, 0.65, t));
+  color = mix(color, uRed * 1.1, smoothstep(0.65, 1.0, t));
+  gl_FragColor = vec4(color * alpha * uOpacity, 1.0);
+  #include <colorspace_fragment>
+}`;
+
+/** Drape over the field's extent, each vertex on the (lifted) terrain; uv (0, 0) at the south-west texel. */
+function heatDrape(city: CityModel, field: HeatField, lift: number) {
+  const widthM = (field.width - 1) * field.texel, depthM = (field.height - 1) * field.texel;
+  const geometry = new PlaneGeometry(widthM, depthM, Math.max(1, Math.ceil(widthM / HEAT_MESH_M)), Math.max(1, Math.ceil(depthM / HEAT_MESH_M)));
+  // The plane lies in (east, north); place it, then drape each vertex.
+  const positions = geometry.getAttribute('position');
+  for (let i = 0; i < positions.count; i++) {
+    const east = positions.getX(i) + field.west + widthM / 2, north = positions.getY(i) + field.south + depthM / 2;
+    const point = unproject([east, north], city.frame);
+    positions.setXYZ(i, east, ground(city, point, lift) + HEAT_LIFT_M, -north);
+  }
+  positions.needsUpdate = true;
+  geometry.computeBoundingSphere();
+  return geometry;
+}
+
+function heatTexture(field: HeatField) {
+  const texture = new DataTexture(field.values, field.width, field.height, RedFormat, UnsignedByteType);
+  texture.magFilter = texture.minFilter = LinearFilter;
+  texture.wrapS = texture.wrapT = ClampToEdgeWrapping;
+  texture.generateMipmaps = false;
+  // One byte per texel: rows are not padded to 4 bytes.
+  texture.unpackAlignment = 1;
+  texture.needsUpdate = true;
+  return texture;
+}
 
 /**
- * Heat for one slice: a ground-draped grey glow per weighted point, brighter and wider with
- * weight. Opacity ramps toward 1 while `live` and toward 0 after, then the layer reports itself done.
+ * Heat for one slice: a smooth ground-draped glow from the slice's heat cells (see heat.ts).
+ * Opacity ramps toward 1 while `live` and toward 0 after, then the layer reports itself done.
  */
-function HeatLayer({ city, heat, lift, live, onDone }: {
-  city: CityModel; heat: HeatPoint[]; lift: number; live: boolean; onDone: () => void;
+function HeatLayer({ city, field, lift, live, onDone }: {
+  city: CityModel; field: HeatField; lift: number; live: boolean; onDone: () => void;
 }) {
-  const discs = useRef<InstancedMesh>(null);
-  const discMaterial = useRef<MeshBasicMaterial>(null);
   const fade = useRef(0);
   const done = useRef(false);
-  const count = Math.max(1, heat.length);
-  const discGeometry = useMemo(() => new PlaneGeometry(1, 1).rotateX(-Math.PI / 2), []);
-  useLayoutEffect(() => () => discGeometry.dispose(), [discGeometry]);
-  useLayoutEffect(() => {
-    const max = Math.max(...heat.map((point) => point[2]), Number.EPSILON);
-    const color = new Color();
-    heat.forEach(([lng, lat, weight], i) => {
-      const t = weight / max;
-      const [x, , z] = toWorld([lng, lat], city.frame);
-      scratch.position.set(x, ground(city, [lng, lat], lift) + 0.8, z);
-      scratch.scale.set(14 + 26 * t, 1, 14 + 26 * t);
-      scratch.updateMatrix();
-      discs.current?.setMatrixAt(i, scratch.matrix);
-      discs.current?.setColorAt(i, color.setScalar(0.04 + 0.2 * t));
-    });
-    const target = discs.current;
-    if (target) {
-      target.count = heat.length;
-      target.instanceMatrix.needsUpdate = true;
-      if (target.instanceColor) target.instanceColor.needsUpdate = true;
-    }
-  }, [city, heat, count, lift]);
+  const geometry = useMemo(() => heatDrape(city, field, lift), [city, field, lift]);
+  const material = useMemo(() => new ShaderMaterial({
+    vertexShader: HEAT_VERTEX, fragmentShader: HEAT_FRAGMENT,
+    uniforms: {
+      uField: { value: heatTexture(field) }, uSize: { value: new Vector2(field.width, field.height) },
+      uAmber: { value: new Color(HEAT_RAMP.amber) }, uRed: { value: new Color(HEAT_RAMP.red) }, uOpacity: { value: 0 },
+    },
+    transparent: true, depthWrite: false, blending: AdditiveBlending, clipping: true,
+    polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2,
+  }), [field]);
+  useLayoutEffect(() => () => geometry.dispose(), [geometry]);
+  useLayoutEffect(() => () => { (material.uniforms.uField.value as DataTexture).dispose(); material.dispose(); }, [material]);
   useFrame((_, delta) => {
     const step = Math.min(delta, 0.1) / HEAT_FADE_S;
     fade.current = Math.max(0, Math.min(1, fade.current + (live ? step : -step)));
-    const eased = fade.current * fade.current * (3 - 2 * fade.current);
-    if (discMaterial.current) discMaterial.current.opacity = eased;
+    material.uniforms.uOpacity.value = fade.current * fade.current * (3 - 2 * fade.current);
     if (!live && fade.current === 0 && !done.current) { done.current = true; onDone(); }
   });
-  return (
-    <group name="heat">
-      <instancedMesh key={`d${count}`} ref={discs} args={[discGeometry, undefined, count]} frustumCulled={false}>
-        <meshBasicMaterial ref={discMaterial} map={radialGlow()} transparent opacity={0} blending={AdditiveBlending}
-          depthWrite={false} />
-      </instancedMesh>
-    </group>
-  );
+  return <mesh name="heat" geometry={geometry} material={material} renderOrder={5} raycast={() => null} />;
 }
 
 /**
  * Cross-fades heat layers: a new slice (or switching the heatmap on) fades a layer in while the
- * previous one fades out; switching off fades the last layer out.
+ * previous one fades out; switching off fades the last layer out. `reference` is the people per
+ * cell that reads as full red, shared by every slice of the result (heatReference). `onCells`
+ * receives the number of heat cells in the layer being shown, 0 when the heatmap is off or empty.
  */
-export function Heat({ city, heat, lift, visible }: { city: CityModel; heat: HeatPoint[]; lift: number; visible: boolean }) {
-  const shown = visible && heat.length > 0 ? heat : null;
+export function Heat({ city, heat, reference, lift, visible, onCells }: {
+  city: CityModel; heat: HeatPoint[]; reference: number; lift: number; visible: boolean; onCells?: (count: number) => void;
+}) {
+  const field = useMemo(() => heatField(heat, city.frame, reference), [heat, city, reference]);
+  const shown = visible ? field : null;
   const next = useRef(0);
-  const [layers, setLayers] = useState<{ id: number; heat: HeatPoint[]; live: boolean }[]>([]);
+  const [layers, setLayers] = useState<{ id: number; field: HeatField; live: boolean }[]>([]);
   useEffect(() => {
     setLayers((previous) => {
-      const kept = previous.map((layer) => (layer.heat === shown ? layer : { ...layer, live: false }));
-      if (!shown || kept.some((layer) => layer.heat === shown && layer.live)) return kept;
-      return [...kept, { id: next.current++, heat: shown, live: true }];
+      const kept = previous.map((layer) => (layer.field === shown ? layer : { ...layer, live: false }));
+      if (!shown || kept.some((layer) => layer.field === shown && layer.live)) return kept;
+      return [...kept, { id: next.current++, field: shown, live: true }];
     });
   }, [shown]);
+  useEffect(() => { onCells?.(shown?.cells ?? 0); }, [shown, onCells]);
+  useEffect(() => () => onCells?.(0), [onCells]);
   return (
     <>
       {layers.map((layer) => (
-        <HeatLayer key={layer.id} city={city} heat={layer.heat} lift={lift} live={layer.live}
+        <HeatLayer key={layer.id} city={city} field={layer.field} lift={lift} live={layer.live}
           onDone={() => setLayers((previous) => previous.filter((l) => l.id !== layer.id))} />
       ))}
     </>

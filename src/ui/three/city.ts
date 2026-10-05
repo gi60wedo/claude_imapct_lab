@@ -1,8 +1,10 @@
 // Loads the terrain and LoD2 buildings once and turns them into a handful of merged three.js
 // objects in the local metric frame (x east, y up = elevation − baseElevation, z = −north).
 // The look is a dark monochrome map: matte near-black terrain with faint grey 5 m contours decoded
-// from the DGM1 raster in the shader, flat dark-grey buildings with lighter roof tops, and thin
-// light-grey edges at low opacity.
+// from the DGM1 raster in the shader and a procedural paving (mottle and sett joints), dark-grey
+// buildings with a procedural facade (storey window grid, a few seeded lit windows, a darker
+// ground floor), warmer tiled roofs, and thin light-grey edges at low opacity. Two weather
+// uniforms wet the ground and walls (rain) or lay a thin snow tint on roofs and ground.
 import {
   BackSide, BufferGeometry, ClampToEdgeWrapping, Color, DataTexture, DataUtils, DoubleSide, EdgesGeometry,
   Float32BufferAttribute, Group, HalfFloatType, LinearFilter, LineBasicMaterial, LineSegments, Mesh,
@@ -15,7 +17,8 @@ import {
   type Bounds, type ElevationDecoder, type ElevationRaster, type LngLat, type LocalFrame,
 } from './geometry';
 import { eaveHeight, loadRoofs, type RoofMap } from './roofs';
-import { MAP } from './style';
+import { DETAIL_GLSL, NOISE_GLSL } from './shaders';
+import { FACADE, MAP } from './style';
 
 interface TerrainMetadata {
   bounds: Bounds; baseElevation: number; elevationDecoder?: ElevationDecoder;
@@ -27,11 +30,44 @@ interface BuildingsAsset { baseElevation: number; buildings: BuildingRecord[] }
 /**
  * Uniforms shared by every building, edge and shadow-depth material: uLift, the vertical
  * exaggeration applied to building bases. The terrain mesh takes the same factor as its y scale,
- * so buildings stay seated on the exaggerated ground.
+ * so buildings stay seated on the exaggerated ground. uWet and uSnow (0–1) are the weather, eased
+ * by the Weather layer and read by the terrain, building and road shaders.
  */
 export interface CityUniforms {
   uLift: { value: number };
+  uWet: { value: number };
+  uSnow: { value: number };
 }
+
+/** Weather shading shared by the ground and the roads: wet darkens and glosses, snow lightens. */
+export const WEATHER_GLSL = /* glsl */ `
+uniform float uWet; uniform float uSnow; uniform vec3 uSnowColor;
+float puddles(vec2 plan) { return smoothstep(0.55, 0.78, valueNoise(plan * 0.11)); }
+vec3 weatherGround(vec3 albedo, vec2 plan, float snowCover) {
+  albedo *= 1.0 - uWet * (0.2 + 0.18 * puddles(plan));
+  float drift = 0.65 + 0.35 * valueNoise(plan * 0.17);
+  return mix(albedo, uSnowColor, uSnow * snowCover * drift);
+}
+float weatherRoughness(float roughness, vec2 plan) { return mix(roughness, mix(0.5, 0.16, puddles(plan)), uWet); }
+`;
+
+/** Sett joints in a running bond of `size` metres, faded out where they would shimmer. */
+const SETT_GLSL = /* glsl */ `
+float settJoints(vec2 plan, vec2 size) {
+  vec2 sett = plan / size;
+  sett.x += 0.5 * mod(floor(sett.y), 2.0);
+  vec2 edge = 0.5 - abs(fract(sett) - 0.5);
+  vec2 w = fwidth(sett);
+  vec2 line = 1.0 - smoothstep(0.2 * w, 1.2 * w, edge);
+  return max(line.x, line.y) * detailFade(sett);
+}
+`;
+
+export const GROUND_GLSL = NOISE_GLSL + DETAIL_GLSL + WEATHER_GLSL + SETT_GLSL;
+
+const weatherUniforms = (uniforms: CityUniforms) => ({
+  uWet: uniforms.uWet, uSnow: uniforms.uSnow, uSnowColor: { value: new Color(MAP.snow) },
+});
 
 export interface CityModel {
   frame: LocalFrame;
@@ -112,9 +148,10 @@ function heightTexture(raster: ElevationRaster) {
   return { texture, range: new Vector2(low, high) };
 }
 
-function terrainMaterial(raster: ElevationRaster, baseElevation: number, rect: Vector4) {
+function terrainMaterial(raster: ElevationRaster, baseElevation: number, rect: Vector4, city: CityUniforms) {
   const { texture, range } = heightTexture(raster);
   const uniforms = {
+    ...weatherUniforms(city),
     uHeight: { value: texture },
     uHeightSize: { value: new Vector2(texture.image.width, texture.image.height) },
     uBaseElevation: { value: baseElevation },
@@ -127,15 +164,18 @@ function terrainMaterial(raster: ElevationRaster, baseElevation: number, rect: V
   material.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, uniforms);
     shader.vertexShader = shader.vertexShader
-      .replace('#include <common>', '#include <common>\nuniform vec4 uTerrainRect;\nvarying vec2 vTerrain;')
+      .replace('#include <common>', '#include <common>\nuniform vec4 uTerrainRect;\nvarying vec2 vTerrain;\nvarying vec2 vPlan;')
       // Local position is (east, elevation, −north) before the lift scale: x and z map onto the raster.
       .replace('#include <begin_vertex>', `#include <begin_vertex>
-vTerrain = vec2((position.x - uTerrainRect.x) / uTerrainRect.z, (uTerrainRect.y + position.z) / uTerrainRect.w);`);
+vTerrain = vec2((position.x - uTerrainRect.x) / uTerrainRect.z, (uTerrainRect.y + position.z) / uTerrainRect.w);
+vPlan = position.xz;`);
     shader.fragmentShader = shader.fragmentShader
       .replace('#include <common>', `#include <common>
 uniform sampler2D uHeight; uniform vec2 uHeightSize; uniform float uBaseElevation; uniform vec2 uHeightRange;
 uniform vec3 uContourColor;
 varying vec2 vTerrain;
+varying vec2 vPlan;
+${GROUND_GLSL}
 // Anti-aliased iso-line of h every interval metres; fades out where lines crowd below a pixel.
 float contourLine(float h, float interval, float width) {
   float v = h / interval;
@@ -148,14 +188,20 @@ vec2 terrainUv = (clamp(vTerrain * uHeightSize, vec2(0.0), uHeightSize - 1.0) + 
 float terrainRel = texture2D(uHeight, terrainUv).r;
 float terrainT = clamp((terrainRel - uHeightRange.x) / max(uHeightRange.y - uHeightRange.x, 1e-3), 0.0, 1.0);
 diffuseColor.rgb *= mix(0.85, 1.15, terrainT);
+// Paving: large and small mottle, then sett joints that show from street level only.
+diffuseColor.rgb *= 0.88 + 0.16 * valueNoise(vPlan * 0.06) + 0.08 * valueNoise(vPlan * 0.45);
+diffuseColor.rgb *= 1.0 - 0.32 * settJoints(vPlan, vec2(1.1, 0.7));
+diffuseColor.rgb = weatherGround(diffuseColor.rgb, vPlan, 0.07);
 float terrainLines = contourLine(terrainRel + uBaseElevation, ${CONTOUR_M.toFixed(1)}, 1.0);`)
+      .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
+roughnessFactor = weatherRoughness(roughnessFactor, vPlan);`)
       .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
 totalEmissiveRadiance += uContourColor * terrainLines * 0.35;`);
   };
   return material;
 }
 
-function buildTerrain(raster: ElevationRaster, frame: LocalFrame, baseElevation: number) {
+function buildTerrain(raster: ElevationRaster, frame: LocalFrame, baseElevation: number, uniforms: CityUniforms) {
   const [west, south, east, north] = raster.bounds;
   const [x0, n0] = project([west, south], frame), [x1, n1] = project([east, north], frame);
   const width = x1 - x0, depth = n1 - n0;
@@ -174,20 +220,68 @@ function buildTerrain(raster: ElevationRaster, frame: LocalFrame, baseElevation:
   positions.needsUpdate = true;
   geometry.computeVertexNormals();
   geometry.computeBoundingSphere();
-  const mesh = new Mesh(geometry, terrainMaterial(raster, baseElevation, new Vector4(x0, n1, width, depth)));
+  const mesh = new Mesh(geometry, terrainMaterial(raster, baseElevation, new Vector4(x0, n1, width, depth), uniforms));
   mesh.receiveShadow = true;
   mesh.name = 'terrain';
   return { mesh, width, depth };
 }
 
 /** Raises each vertex by (uLift − 1) × its building's base, so the base sits on lifted terrain. */
-function injectLift(shader: WebGLProgramParametersWithUniforms, uniforms: CityUniforms, extra = '') {
+function injectLift(shader: WebGLProgramParametersWithUniforms, uniforms: CityUniforms, extra = '', declarations = '') {
   Object.assign(shader.uniforms, uniforms);
   shader.vertexShader = shader.vertexShader
-    .replace('#include <common>', '#include <common>\nattribute float aBase;\nuniform float uLift;\nvarying float vAbove;\nvarying float vUp;')
+    .replace('#include <common>', `#include <common>\nattribute float aBase;\nuniform float uLift;\nvarying float vAbove;\nvarying float vUp;${declarations}`)
     .replace('#include <begin_vertex>',
       `#include <begin_vertex>\nvAbove = max(position.y - aBase, 0.0);\ntransformed.y += (uLift - 1.0) * aBase;${extra}`);
 }
+
+/**
+ * Facade and roof in the fragment shader. Walls: a window per bay and storey on every full upper
+ * storey, a few warm lit windows seeded per building and window cell, and a darker ground floor
+ * with shopfront glazing. Roofs (faces pointing up): a warmer grey with tile courses and mottle.
+ * Every pattern fades to its average where it would shrink below a few pixels.
+ */
+const FACADE_GLSL = /* glsl */ `
+varying float vAbove; varying float vUp; varying vec2 vPlan; varying float vAlong; varying float vSeed; varying float vTop;
+uniform vec3 uRoofColor; uniform vec3 uWindowColor; uniform vec3 uWindowLit;
+${NOISE_GLSL}
+${DETAIL_GLSL}
+${WEATHER_GLSL}
+const float STOREY = ${FACADE.storeyM.toFixed(2)};
+const float BAY = ${FACADE.bayM.toFixed(2)};
+const float GROUND_FLOOR = ${FACADE.groundFloorM.toFixed(2)};
+float band(float x, float a, float b, float w) { return smoothstep(a - w, a + w, x) - smoothstep(b - w, b + w, x); }
+`;
+
+const FACADE_COLOR = /* glsl */ `
+float roofness = smoothstep(0.35, 0.6, vUp);
+// Walls.
+vec2 cell = vec2(vAlong / BAY, (vAbove - GROUND_FLOOR) / STOREY + 1.0);
+vec2 cellId = floor(cell), cellF = fract(cell), cellW = fwidth(cell);
+float fade = detailFade(cell);
+float fullStorey = step(GROUND_FLOOR, vAbove) * step(GROUND_FLOOR + cellId.y * STOREY, vTop - 0.5);
+float pane = band(cellF.x, 0.24, 0.76, cellW.x) * band(cellF.y, 0.22, 0.78, cellW.y);
+float litShare = 0.05 + 0.1 * hash11(vSeed * 1.7 + 3.0);
+float lit = step(1.0 - litShare, hash13(vec3(cellId, vSeed)));
+float windows = mix(0.27, pane, fade) * fullStorey;
+float glowing = mix(0.27 * litShare, pane * lit, fade) * fullStorey;
+float groundFloor = 1.0 - smoothstep(GROUND_FLOOR - 0.15, GROUND_FLOOR + 0.15, vAbove);
+float shop = mix(0.45, band(fract(vAlong / (BAY * 1.6)), 0.1, 0.9, cellW.x / 1.6) * band(vAbove, 0.5, 2.8, fwidth(vAbove)), fade) * groundFloor;
+vec3 wall = diffuseColor.rgb * (1.0 - 0.28 * groundFloor);
+wall = mix(wall, uWindowColor, 0.85 * max(windows, shop));
+wall *= 1.0 - 0.12 * uWet;
+// Roofs: tile courses every 0.42 m of height on pitched faces, mottle on all.
+float courses = vAbove / 0.42;
+float courseLine = smoothstep(0.6, 0.95, abs(fract(courses) - 0.5) * 2.0);
+float pitched = 1.0 - step(0.97, vUp);
+vec3 roof = uRoofColor * (0.88 + 0.16 * valueNoise(vPlan * 0.55 + vSeed) + 0.06 * valueNoise(vPlan * 0.05));
+roof *= 1.0 - 0.2 * courseLine * detailFade(vec2(courses)) * pitched;
+float snowCap = uSnow * smoothstep(0.45, 0.8, vUp) * (0.72 + 0.28 * valueNoise(vPlan * 0.4));
+roof = mix(roof * (1.0 - 0.15 * uWet), uSnowColor, 0.5 * snowCap);
+diffuseColor.rgb = mix(wall, roof, roofness) * (0.78 + 0.22 * smoothstep(0.0, 6.0, vAbove));
+float facadeGlass = (1.0 - roofness) * max(windows, shop);
+float facadeLit = (1.0 - roofness) * glowing;
+`;
 
 function buildingMaterials(uniforms: CityUniforms) {
   // Double-sided so a section cut (side view) shows the far walls of sliced buildings instead of
@@ -195,14 +289,30 @@ function buildingMaterials(uniforms: CityUniforms) {
   const massing = new MeshStandardMaterial({
     color: new Color(MAP.building), roughness: 1, metalness: 0, side: DoubleSide, shadowSide: BackSide,
   });
-  // Flat dark massing: a soft contact shade over the first metres above the base, and roof tops
-  // (faces pointing up) a touch lighter than the walls.
+  const facade = {
+    ...weatherUniforms(uniforms),
+    uRoofColor: { value: new Color(MAP.roof) },
+    uWindowColor: { value: new Color(MAP.window) },
+    uWindowLit: { value: new Color(MAP.windowLit) },
+  };
   massing.onBeforeCompile = (shader) => {
-    injectLift(shader, uniforms, '\nvUp = normalize(mat3(modelMatrix) * objectNormal).y;');
+    Object.assign(shader.uniforms, facade);
+    // The along-wall coordinate runs on the wall's horizontal tangent, so windows line up per face.
+    injectLift(shader, uniforms, `
+vUp = normalize(mat3(modelMatrix) * objectNormal).y;
+vec2 wallNormal = normalize(objectNormal.xz + vec2(1e-5, 0.0));
+vAlong = dot(position.xz, vec2(-wallNormal.y, wallNormal.x));
+vPlan = position.xz;
+vSeed = aSeed;
+vTop = aTop;`, '\nattribute float aSeed;\nattribute float aTop;\nvarying vec2 vPlan;\nvarying float vAlong;\nvarying float vSeed;\nvarying float vTop;');
     shader.fragmentShader = shader.fragmentShader
-      .replace('#include <common>', '#include <common>\nvarying float vAbove;\nvarying float vUp;')
-      .replace('#include <color_fragment>', `#include <color_fragment>
-diffuseColor.rgb *= (0.78 + 0.22 * smoothstep(0.0, 6.0, vAbove)) * (1.0 + 0.12 * smoothstep(0.35, 0.8, abs(vUp)));`);
+      .replace('#include <common>', `#include <common>\n${FACADE_GLSL}`)
+      .replace('#include <color_fragment>', `#include <color_fragment>\n${FACADE_COLOR}`)
+      .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
+roughnessFactor = mix(roughnessFactor, 0.35, facadeGlass);
+roughnessFactor = mix(roughnessFactor, 0.45, uWet);`)
+      .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
+totalEmissiveRadiance += uWindowLit * facadeLit * 0.16;`);
   };
   const edges = new LineBasicMaterial({
     color: new Color(MAP.edge), transparent: true, opacity: MAP.edgeOpacity, depthWrite: false,
@@ -214,10 +324,15 @@ diffuseColor.rgb *= (0.78 + 0.22 * smoothstep(0.0, 6.0, vAbove)) * (1.0 + 0.12 *
   return { massing, edges, depth };
 }
 
-/** Per-vertex copy of the building base, read by the uLift shader code. */
-function withBase<T extends BufferGeometry>(geometry: T, zBase: number): T {
+/**
+ * Per-vertex copies of the building's base (read by the uLift shader code), its index (the seed
+ * of its lit windows) and its wall height above the base (the facade's last full storey).
+ */
+function withBase<T extends BufferGeometry>(geometry: T, zBase: number, seed: number, top: number): T {
   const count = geometry.getAttribute('position').count;
   geometry.setAttribute('aBase', new Float32BufferAttribute(new Float32Array(count).fill(zBase), 1));
+  geometry.setAttribute('aSeed', new Float32BufferAttribute(new Float32Array(count).fill(seed), 1));
+  geometry.setAttribute('aTop', new Float32BufferAttribute(new Float32Array(count).fill(top), 1));
   return geometry;
 }
 
@@ -252,12 +367,12 @@ async function buildBuildings(asset: BuildingsAsset, frame: LocalFrame, uniforms
       const [x, n] = project(rings![0][0], frame);
       const key = `${Math.floor(x / TILE_M)}:${Math.floor(n / TILE_M)}`;
       const tile = tiles.get(key) ?? { solids: [], edges: [] };
-      tile.solids.push(withBase(geometry, zBase!));
-      tile.edges.push(withBase(new EdgesGeometry(geometry, 28), zBase!));
+      tile.solids.push(withBase(geometry, zBase!, i, wallHeight));
+      tile.edges.push(withBase(new EdgesGeometry(geometry, 28), zBase!, i, wallHeight));
       const top = roof && wallHeight !== building.h ? roofGeometry(roof, frame) : null;
       if (top) {
-        tile.solids.push(withBase(top, zBase!));
-        tile.edges.push(withBase(new EdgesGeometry(top, 20), zBase!));
+        tile.solids.push(withBase(top, zBase!, i, wallHeight));
+        tile.edges.push(withBase(new EdgesGeometry(top, 20), zBase!, i, wallHeight));
         roofed++;
       }
       tiles.set(key, tile);
@@ -309,8 +424,8 @@ async function loadCity(): Promise<CityModel> {
   const frame = createLocalFrame([(west + east) / 2, (south + north) / 2]);
   const decoder = terrain.elevationDecoder ?? TERRARIUM;
   const raster = await loadRaster(terrain.elevation?.url ?? '/data/terrain/elevation.png', terrain.bounds, decoder);
-  const uniforms: CityUniforms = { uLift: { value: 1 } };
-  const ground = buildTerrain(raster, frame, terrain.baseElevation);
+  const uniforms: CityUniforms = { uLift: { value: 1 }, uWet: { value: 0 }, uSnow: { value: 0 } };
+  const ground = buildTerrain(raster, frame, terrain.baseElevation, uniforms);
   const { meshes, built } = await buildBuildings(asset, frame, uniforms, null);
   const group = new Group();
   group.name = 'buildings';

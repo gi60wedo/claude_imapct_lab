@@ -1,23 +1,26 @@
-// Three.js view of the Altstadt twin as a dark monochrome map: the LoD2 buildings as flat grey
-// massing on a near-black DGM1 terrain, grey streets by road class, the candidate sites in white
-// and grey, and the selected site's simulation (agent dots, heat, bottlenecks, stalls). The agent
-// dots carry the only colour.
+// Three.js view of the Altstadt twin as a dark monochrome map: the LoD2 buildings as dark-grey
+// massing with procedural facades and roofs on a paved near-black DGM1 terrain, grey streets by
+// road class, the candidate sites in white and grey, the scenario's weather, and the selected
+// site's simulation (agent dots, heat glow, bottlenecks, stalls). The agent dots and the heat
+// glow carry the only colour.
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type JSX, type RefObject } from 'react';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { OrbitControls } from '@react-three/drei';
 import {
-  BufferGeometry, Color, DoubleSide, Float32BufferAttribute, Fog, type LineSegments, PCFShadowMap, type PerspectiveCamera,
-  Uint32BufferAttribute, Vector3,
+  BufferGeometry, Color, DoubleSide, Float32BufferAttribute, Fog, type LineSegments, MeshStandardMaterial, PCFShadowMap,
+  type PerspectiveCamera, Uint32BufferAttribute, Vector3,
 } from 'three';
-import type { Candidate, SimulationResult, TimeSlice } from '../../contracts';
+import type { Candidate, Scenario, SimulationResult, TimeSlice } from '../../contracts';
 import { cameraPreset, SIDE_LIFT, type CameraMode, type Vec3 } from './camera';
-import { getCity, upgradeRoofs, type CityModel } from './city';
+import { getCity, GROUND_GLSL, upgradeRoofs, type CityModel } from './city';
 import { AdaptiveResolution, Effects } from './effects';
+import { heatReference } from './heat';
 import { Bottlenecks, Candidates, ground, Heat, LABEL_LIFT_M, siteAnchor, sliceOf, Stalls, Trips } from './layers';
 import { Lights } from './lighting';
 import { sectionFor, SectionClip, SectionProfile } from './section';
 import { getStreets, ROAD_LIFT_M, STREET_LIFT_M, type LineSet, type RoadMesh, type Streets } from './streets';
-import { CAMERA_TWEEN_S, easeInOutCubic, MAP, SURFACES, type AgentColors, type Quality } from './style';
+import { CAMERA_TWEEN_S, easeInOutCubic, MAP, SURFACES, weatherLook, type AgentColors, type Quality } from './style';
+import { Weather } from './weather';
 
 export type { CameraMode } from './camera';
 export type { AgentColors, Quality } from './style';
@@ -40,7 +43,13 @@ export interface CityThreeProps {
   streets?: boolean;
   /** Agent dots in persona colours or all white. Default 'persona'. */
   agentColors?: AgentColors;
+  /** Weather to draw. Default: the result's scenario, else clear (SUNNY_SAT). */
+  weather?: Scenario;
 }
+
+/** The scenario whose weather the city shows. */
+export const weatherOf = (props: Pick<CityThreeProps, 'weather' | 'result'>): Scenario =>
+  props.weather ?? props.result?.scenario ?? 'SUNNY_SAT';
 
 const BACKGROUND = MAP.background;
 const DEFAULT_SLICE: TimeSlice = '11:30_PEAK';
@@ -63,7 +72,9 @@ function focusPoint(city: CityModel, candidate: Candidate | undefined, lift: num
  * hands control back to the damped OrbitControls. Grabbing the controls interrupts the tween; a
  * new preset mid-tween restarts from wherever the camera is.
  */
-function CameraRig({ mode, focus, forward }: { mode: CameraMode; focus: Vec3; forward: [number, number] }) {
+function CameraRig({ mode, focus, forward, haze, hazeColor }: {
+  mode: CameraMode; focus: Vec3; forward: [number, number]; haze: number; hazeColor: string;
+}) {
   const camera = useThree((state) => state.camera) as PerspectiveCamera;
   const controls = useThree((state) => state.controls) as unknown as Controls | null;
   const scene = useThree((state) => state.scene);
@@ -72,6 +83,10 @@ function CameraRig({ mode, focus, forward }: { mode: CameraMode; focus: Vec3; fo
     to: { position: new Vector3(), target: new Vector3(), fov: 42 },
     elapsed: 0, active: false, pending: true,
   });
+  // Haze eases with the weather: the fog closes in and takes the weather's colour.
+  const mist = useRef({ amount: haze, color: new Color(hazeColor) });
+  const clear = useMemo(() => new Color(BACKGROUND), []);
+  const goalColor = useMemo(() => new Color(hazeColor), [hazeColor]);
   const [fx, fy, fz] = focus;
   const [dx, dz] = forward;
   useEffect(() => {
@@ -91,6 +106,10 @@ function CameraRig({ mode, focus, forward }: { mode: CameraMode; focus: Vec3; fo
   }, [controls]);
   useFrame((_, delta) => {
     if (!controls) return;
+    const m = mist.current;
+    const k = 1 - Math.exp(-Math.min(delta, 0.1) * 1.6);
+    m.amount += (haze - m.amount) * k;
+    m.color.lerp(goalColor, k);
     const t = tween.current;
     if (t.pending) {
       t.from.position.copy(camera.position);
@@ -115,8 +134,9 @@ function CameraRig({ mode, focus, forward }: { mode: CameraMode; focus: Vec3; fo
     // still fades the far city into the night.
     if (scene.fog instanceof Fog) {
       const distance = camera.position.distanceTo(controls.target);
-      scene.fog.near = distance * 1.1;
-      scene.fog.far = distance * 3.6 + 500;
+      scene.fog.near = distance * (1.1 - 0.75 * m.amount);
+      scene.fog.far = (distance * 3.6 + 500) * (1 - 0.45 * m.amount);
+      scene.fog.color.copy(clear).lerp(m.color, Math.min(1, m.amount * 2));
     }
   });
   return null;
@@ -145,22 +165,50 @@ function SurfaceLines({ set, dashed, lift }: { set: LineSet; dashed: boolean; li
   );
 }
 
+/**
+ * Lit road surface: fine asphalt grain on vehicle roads, sett joints on paved pedestrian ways and
+ * plazas, the weather's wet gloss and (lighter, since streets are cleared) snow. The albedo is
+ * lifted to make up for the light, so sunlit roads keep their class grey and shadows fall on them.
+ */
+function roadMaterial(city: CityModel) {
+  const material = new MeshStandardMaterial({ vertexColors: true, roughness: 0.95, metalness: 0, side: DoubleSide, depthWrite: false });
+  material.onBeforeCompile = (shader) => {
+    Object.assign(shader.uniforms, { uWet: city.uniforms.uWet, uSnow: city.uniforms.uSnow, uSnowColor: { value: new Color(MAP.snow) } });
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', '#include <common>\nattribute float aPaved;\nvarying float vPaved;\nvarying vec2 vPlan;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvPaved = aPaved;\nvPlan = position.xz;');
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', `#include <common>\nvarying float vPaved;\nvarying vec2 vPlan;\n${GROUND_GLSL}`)
+      .replace('#include <color_fragment>', `#include <color_fragment>
+diffuseColor.rgb *= 1.5;
+float asphalt = 0.9 + 0.12 * valueNoise(vPlan * 1.9) + 0.06 * valueNoise(vPlan * 0.15);
+float paving = (0.94 + 0.1 * valueNoise(vPlan * 0.5)) * (1.0 - 0.3 * settJoints(vPlan, vec2(0.9, 0.6)));
+diffuseColor.rgb *= mix(asphalt, paving, vPaved);
+diffuseColor.rgb = weatherGround(diffuseColor.rgb, vPlan, mix(0.03, 0.06, vPaved));`)
+      .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
+roughnessFactor = weatherRoughness(roughnessFactor, vPlan);`);
+  };
+  return material;
+}
+
 /** Grey road ribbons on the terrain, painted in index order after the terrain and buildings. */
-function Roads({ roads, lift }: { roads: RoadMesh; lift: number }) {
+function Roads({ city, roads, lift }: { city: CityModel; roads: RoadMesh; lift: number }) {
   const geometry = useMemo(() => {
     const g = new BufferGeometry();
     g.setAttribute('position', new Float32BufferAttribute(roads.positions, 3));
     g.setAttribute('color', new Float32BufferAttribute(roads.colors, 3));
+    g.setAttribute('aPaved', new Float32BufferAttribute(roads.paved, 1));
     g.setIndex(new Uint32BufferAttribute(roads.index, 1));
+    g.computeVertexNormals();
     g.computeBoundingSphere();
     return g;
   }, [roads]);
+  const material = useMemo(() => roadMaterial(city), [city]);
   useLayoutEffect(() => () => geometry.dispose(), [geometry]);
+  useLayoutEffect(() => () => material.dispose(), [material]);
   return (
-    <mesh geometry={geometry} scale-y={lift} position-y={ROAD_LIFT_M} renderOrder={1} raycast={() => null}
-      frustumCulled={false}>
-      <meshBasicMaterial vertexColors side={DoubleSide} depthWrite={false} />
-    </mesh>
+    <mesh geometry={geometry} material={material} scale-y={lift} position-y={ROAD_LIFT_M} renderOrder={1}
+      raycast={() => null} frustumCulled={false} receiveShadow />
   );
 }
 
@@ -195,9 +243,9 @@ function LabelAnchor({ label, anchor }: { label: RefObject<HTMLDivElement | null
   return null;
 }
 
-function Scene({ city, props, label, streets, roofs, onAgentCount }: {
+function Scene({ city, props, label, streets, roofs, onAgentCount, onHeatCells }: {
   city: CityModel; props: CityThreeProps; label: RefObject<HTMLDivElement | null>;
-  streets: Streets | null; roofs: number; onAgentCount: (count: number) => void;
+  streets: Streets | null; roofs: number; onAgentCount: (count: number) => void; onHeatCells: (count: number) => void;
 }) {
   const { cameraMode, heatmap, selectedId, candidates, result, timeSec, onSelect } = props;
   const quality = props.quality ?? 'high';
@@ -210,6 +258,11 @@ function Scene({ city, props, label, streets, roofs, onAgentCount }: {
   const activeSlice = props.slice ?? DEFAULT_SLICE;
   const slice = result ? sliceOf(result, activeSlice) : null;
   const stallSite = result ? candidates.find((candidate) => candidate.id === result.candidateId) : undefined;
+  // One heat scale for every slice of the result, so a quiet slice reads quieter than the peak.
+  const bySlice = result?.bySlice;
+  const heatScale = useMemo(() => heatReference(bySlice ? { bySlice } : null), [bySlice]);
+  const scenario = weatherOf(props);
+  const look = weatherLook(scenario);
   // Anything that changes what casts shadows, or how they are clipped, re-renders the shadow map.
   const shadowRevision = `${cameraMode}|${roofs}|${result?.candidateId ?? ''}|${result?.stallExposure.length ?? 0}`;
   return (
@@ -217,10 +270,10 @@ function Scene({ city, props, label, streets, roofs, onAgentCount }: {
       <color attach="background" args={[BACKGROUND]} />
       <fog attach="fog" args={[BACKGROUND, 700, 2800]} />
       <Lift city={city} lift={lift} />
-      <Lights focus={focus} slice={activeSlice} quality={quality} revision={shadowRevision} />
+      <Lights focus={focus} slice={activeSlice} quality={quality} revision={shadowRevision} sun={look.sun} />
       <primitive object={city.terrain} />
       <primitive object={city.buildings} />
-      {streets && <Roads roads={streets.roads} lift={lift} />}
+      {streets && <Roads city={city} roads={streets.roads} lift={lift} />}
       {streets && props.streets && <SurfaceLines set={streets.overlay.solid} dashed={false} lift={lift} />}
       {streets && props.streets && <SurfaceLines set={streets.overlay.dashed} dashed lift={lift} />}
       {side && <SectionClip section={section} />}
@@ -230,16 +283,18 @@ function Scene({ city, props, label, streets, roofs, onAgentCount }: {
         <Trips city={city} trips={result.trips} timeSec={timeSec} lift={lift} colors={props.agentColors ?? 'persona'}
           onCount={onAgentCount} />
       )}
-      <Heat city={city} heat={slice?.heat ?? NO_HEAT} lift={lift} visible={heatmap} />
+      <Heat city={city} heat={slice?.heat ?? NO_HEAT} reference={heatScale} lift={lift} visible={heatmap}
+        onCells={onHeatCells} />
       {slice && <Bottlenecks key={activeSlice} city={city} bottlenecks={slice.bottlenecks} lift={lift} />}
       {stallSite && result && result.stallExposure.length > 0 && (
         <Stalls city={city} candidate={stallSite} exposure={result.stallExposure} lift={lift} />
       )}
+      <Weather city={city} scenario={scenario} quality={quality} />
       <LabelAnchor label={label} anchor={anchor} />
       {/* The side elevation looks horizontally, so it may orbit down to the horizon. */}
       <OrbitControls makeDefault enableDamping dampingFactor={0.07} rotateSpeed={0.6} zoomSpeed={0.8}
         maxPolarAngle={side ? Math.PI / 2 : Math.PI * 0.495} minDistance={30} maxDistance={4200} />
-      <CameraRig mode={cameraMode} focus={focus} forward={section.forward} />
+      <CameraRig mode={cameraMode} focus={focus} forward={section.forward} haze={look.haze} hazeColor={look.fog} />
       <AdaptiveResolution quality={quality} />
       <Effects quality={quality} />
     </>
@@ -296,11 +351,15 @@ export default function CityThree(props: CityThreeProps): JSX.Element {
   const onAgentCount = useCallback((count: number) => {
     if (wrapper.current) wrapper.current.dataset.agentCount = String(count);
   }, []);
+  const onHeatCells = useCallback((count: number) => {
+    if (wrapper.current) wrapper.current.dataset.heatCells = String(count);
+  }, []);
   return (
     <div ref={wrapper} data-testid="city-three" data-ready={city ? 'true' : 'false'}
       data-building-count={city ? city.buildingCount : 0} data-roof-count={roofs} data-quality={quality}
       data-streets={streets && overlay ? 'true' : 'false'} data-roads={streetData ? 'true' : 'false'}
       data-agent-count={0} data-agent-colors={props.agentColors ?? 'persona'}
+      data-weather={weatherOf(props)} data-heat-cells={0}
       className="relative h-full w-full overflow-hidden" style={{ background: BACKGROUND }}>
       {city && (
         // MSAA and SMAA run in the composer, so the default framebuffer needs no antialiasing.
@@ -308,7 +367,8 @@ export default function CityThree(props: CityThreeProps): JSX.Element {
           camera={{ position: initial.position, fov: initial.fov, near: 1, far: 9000 }}
           gl={{ antialias: false, stencil: false, powerPreference: 'high-performance' }}
           onCreated={({ scene }) => { scene.background = new Color(BACKGROUND); }}>
-          <Scene city={city} props={props} label={label} streets={streetData} roofs={roofs} onAgentCount={onAgentCount} />
+          <Scene city={city} props={props} label={label} streets={streetData} roofs={roofs} onAgentCount={onAgentCount}
+            onHeatCells={onHeatCells} />
         </Canvas>
       )}
       <div ref={label} className="pointer-events-none absolute left-0 top-0" style={{ visibility: 'hidden' }}

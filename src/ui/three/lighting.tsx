@@ -1,6 +1,7 @@
 // Soft daylight on the massing model: a directional sun with filtered PCF shadows framed on the
 // selected site, plus a hemisphere fill. Colour, intensity and sun direction ease toward the
-// active slice's preset (cool dawn, neutral midday, warm afternoon).
+// active slice's preset (cool dawn, neutral midday, warm afternoon). Overcast weather dims the sun
+// by `sun`, so the shadows soften into the hemisphere fill.
 import { useEffect, useMemo, useRef } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
 import { Color, Vector3, type DirectionalLight, type HemisphereLight } from 'three';
@@ -18,15 +19,17 @@ const TINT_RATE = 3.5;
  * The city is static, so the shadow map renders only when something that casts or frames shadows
  * changes: the `revision` key, or the sun while it eases to a new slice.
  */
-export function Lights({ focus, slice, quality, revision }: { focus: Vec3; slice: TimeSlice; quality: Quality; revision: string }) {
+export function Lights({ focus, slice, quality, revision, sun: sunFactor = 1 }: {
+  focus: Vec3; slice: TimeSlice; quality: Quality; revision: string; sun?: number;
+}) {
   const sun = useRef<DirectionalLight>(null);
   const fill = useRef<HemisphereLight>(null);
   const gl = useThree((state) => state.gl);
   const preset = SUN[slice];
   const goal = useMemo(() => ({
-    direction: new Vector3(...sunDirection(preset)), color: new Color(preset.color), intensity: preset.intensity,
+    direction: new Vector3(...sunDirection(preset)), color: new Color(preset.color), intensity: preset.intensity * sunFactor,
     sky: new Color(preset.sky), ground: new Color(preset.ground), hemisphere: preset.hemisphere,
-  }), [preset]);
+  }), [preset, sunFactor]);
   const current = useRef<typeof goal | null>(null);
   const settings = QUALITY[quality];
 

@@ -2,7 +2,7 @@
 // grey streets) where the agent dots carry the only colour. Render quality tiers, time-of-day
 // lighting, street and road classes and camera easing. Pure data and functions, so the look is
 // testable without WebGL.
-import type { PersonaId, TimeSlice } from '../../contracts';
+import type { PersonaId, Scenario, TimeSlice } from '../../contracts';
 
 export type Quality = 'high' | 'fast';
 
@@ -33,6 +33,13 @@ export const MAP = {
   /** Faint grey of the 5 m contour lines, added as emission. */
   contour: '#1c1c1f',
   building: '#595960',
+  /** Roof albedo: a slightly warmer dark grey than the walls. */
+  roof: '#5f5b58',
+  /** Thin snow on roofs and ground (Christmas market). */
+  snow: '#c2c6cd',
+  /** Glass of the facade windows, and the faint warm light of the lit ones (emission). */
+  window: '#26282d',
+  windowLit: '#ffc979',
   edge: '#b4b4bc',
   edgeOpacity: 0.11,
   siteSelected: '#ffffff',
@@ -100,11 +107,54 @@ export type RoadClassId = 'major' | 'minor' | 'pedestrian' | 'footway';
 
 /** Base street network, drawn always: ribbon width in metres and a flat grey, wider and lighter for major roads. */
 export const ROADS: Record<RoadClassId, { width: number; color: string }> = {
-  major: { width: 9, color: '#4a4a50' },
-  minor: { width: 5.5, color: '#3a3a40' },
-  pedestrian: { width: 4.5, color: '#35353a' },
+  major: { width: 9, color: '#3c3c41' },
+  minor: { width: 5.5, color: '#323236' },
+  pedestrian: { width: 4.5, color: '#47474c' },
   footway: { width: 1.8, color: '#2a2a2f' },
 };
+
+/** Road classes painted as asphalt (fine grain); the rest are paved pedestrian ways and plazas (sett joints). */
+export const ASPHALT_ROADS: RoadClassId[] = ['major', 'minor'];
+
+/** Facade grid: storey height and window bay width, metres. */
+export const FACADE = { storeyM: 3, bayM: 3.2, groundFloorM: 3.6 } as const;
+
+/** Precipitation drawn for a scenario. */
+export type Precipitation = 'none' | 'rain' | 'snow';
+
+export interface WeatherLook {
+  precipitation: Precipitation;
+  /** Instanced streaks or flakes per quality tier. */
+  particles: Record<Quality, number>;
+  /** 0–1: darker, glossier ground and walls. */
+  wet: number;
+  /** 0–1: snow tint on upward-facing roofs and the ground. */
+  snow: number;
+  /** 0–1: pulls the fog in and lifts its colour. */
+  haze: number;
+  /** Sun intensity factor: overcast skies dim the sun and soften the shadows. */
+  sun: number;
+  /** Fog colour at full haze, sRGB. */
+  fog: string;
+}
+
+/**
+ * Weather per scenario: light showers on a rainy Saturday, gentle snowfall over the Christmas
+ * market, clear skies on a sunny Saturday. Shapes the render only; no value here is shown on screen.
+ */
+export const WEATHER: Record<Scenario, WeatherLook> = {
+  SUNNY_SAT: { precipitation: 'none', particles: { high: 0, fast: 0 }, wet: 0, snow: 0, haze: 0, sun: 1, fog: MAP.background },
+  RAINY_SAT: { precipitation: 'rain', particles: { high: 9000, fast: 2500 }, wet: 1, snow: 0, haze: 0.5, sun: 0.45, fog: '#16181c' },
+  CHRISTMAS_MARKET: { precipitation: 'snow', particles: { high: 7000, fast: 2000 }, wet: 0, snow: 1, haze: 0.3, sun: 0.7, fog: '#17181b' },
+};
+
+export const weatherLook = (scenario: Scenario | null | undefined): WeatherLook => WEATHER[scenario ?? 'SUNNY_SAT'] ?? WEATHER.SUNNY_SAT;
+
+/** Heat drape ramp, sRGB: transparent at zero, through amber, to red at the slice's busiest cells. */
+export const HEAT_RAMP = { amber: '#f59e0b', red: '#ef4444' } as const;
+
+/** Agent dot diameters in CSS pixels, constant on screen: the head core and the last trail point. */
+export const DOT = { headPx: 6, tailPx: 2.5, glow: 2.4 } as const;
 
 /** Painter's order: narrow ways first, so wider roads draw over them at junctions. */
 export const ROAD_ORDER: RoadClassId[] = ['footway', 'pedestrian', 'minor', 'major'];
