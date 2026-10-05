@@ -3,7 +3,7 @@ import type { SimOptions, World } from '../../sim';
 import type { WorkerRequest, WorkerResponse } from '../../sim/worker';
 import { fixtureSim } from './fixtures';
 import { toMitigation } from './mitigations';
-import type { SimClient } from './types';
+import type { RunOptions, SimClient } from './types';
 
 const getJson = async <T>(url: string): Promise<T> => {
   const r = await fetch(url);
@@ -52,13 +52,14 @@ export function workerSim(): SimClient {
 
   return {
     candidates: loadCandidates,
-    async run(candidateId: string, scenario: Scenario, mitigations: string[], seed: number) {
+    async run(candidateId: string, scenario: Scenario, mitigations: string[], seed: number, run: RunOptions = {}) {
       const site = (await loadCandidates()).find((c) => c.id === candidateId);
       if (!site) throw new Error(`unknown candidate ${candidateId}`);
       await ready;
       const opts: SimOptions = {
         scenario, seed,
         mitigations: mitigations.map((m) => toMitigation(m, site)).filter((m) => m !== null),
+        ...(run.maxTrips !== undefined && { maxTrips: run.maxTrips }),
       };
       const id = nextId++;
       return new Promise<SimulationResult>((resolve, reject) => {

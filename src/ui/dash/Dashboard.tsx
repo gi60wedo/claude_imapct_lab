@@ -1,15 +1,18 @@
 import { Component, useEffect, useMemo, useState, type ReactNode } from 'react';
 import type { TimeSlice } from '../../contracts';
-import { getState, setState, useStore } from '../state/store';
-import CityThree, { type CameraMode } from '../three/CityThree';
+import { onClock } from '../live/clock';
+import { EventFeed } from '../live/EventFeed';
+import { LiveBar } from '../live/LiveBar';
+import { useLiveSim } from '../live/useLiveSim';
+import { setState, useStore } from '../state/store';
+import CityThree, { type CameraMode, type Quality } from '../three/CityThree';
 import { bootDashboard } from './boot';
-import { CameraSwitch, CandidateList, ProfileCard, TimeBar, TopBar } from './left';
-import { rankCandidates, resultsFor, sliceWindow } from './model';
+import { CameraSwitch, CandidateList, ProfileCard, TopBar } from './left';
+import { rankCandidates, resultsFor } from './model';
 import { Constraints, PersonaCards, ScoreCard, StallGrid } from './right';
 import { Card } from './ui';
 
-/** Wall-clock seconds one pass through a slice window takes while playing. */
-const LOOP_SEC = 30;
+const NO_MITIGATIONS: string[] = [];
 
 class ViewBoundary extends Component<{ children: ReactNode }, { error: string | null }> {
   state = { error: null as string | null };
@@ -29,10 +32,10 @@ export default function Dashboard() {
   const selectedId = useStore((s) => s.selectedId);
   const brief = useStore((s) => s.brief);
   const loading = useStore((s) => s.loading);
-  const playing = useStore((s) => s.playing);
-  const timeSec = useStore((s) => s.timeSec);
   const [cameraMode, setCameraMode] = useState<CameraMode>('perspective');
   const [heatmap, setHeatmap] = useState(true);
+  const [quality, setQuality] = useState<Quality>('high');
+  const [streets, setStreets] = useState(true);
 
   useEffect(() => { bootDashboard().catch((e) => { console.error(e); setState({ loading: false }); }); }, []);
 
@@ -42,33 +45,14 @@ export default function Dashboard() {
   const current = ranked.find((r) => r.candidate.id === selectedId);
   const candidate = candidates.find((c) => c.id === selectedId);
   const result = (selectedId && results[selectedId]) || null;
-  const [from, to] = useMemo(() => sliceWindow(slice, result), [slice, result]);
 
-  // Keep timeSec inside the active window when the slice or the selected result changes.
-  useEffect(() => {
-    const t = getState().timeSec;
-    if (t < from || t > to) setState({ timeSec: from });
-  }, [from, to]);
-
-  useEffect(() => {
-    if (!playing) return;
-    const speed = (to - from) / LOOP_SEC;
-    let frame = 0;
-    let previous: number | undefined;
-    const tick = (now: number) => {
-      if (previous !== undefined) {
-        const t = getState().timeSec + ((now - previous) / 1000) * speed;
-        setState({ timeSec: t > to || t < from ? from : t });
-      }
-      previous = now;
-      frame = requestAnimationFrame(tick);
-    };
-    frame = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(frame);
-  }, [playing, from, to]);
+  // Live run for the selection: more trips than the ranking runs, a market-day clock, cross-fades.
+  const live = useLiveSim({ candidateId: selectedId, scenario, mitigations: result?.mitigations ?? NO_MITIGATIONS, seed: result?.seed ?? 42 });
+  const fallback = useMemo(() => result && onClock(result), [result]);
+  const cityResult = live.view ?? fallback;
 
   const select = (id: string) => setState({ selectedId: id });
-  const pickSlice = (s: TimeSlice) => setState({ slice: s, timeSec: sliceWindow(s, result)[0] });
+  const pickSlice = (s: TimeSlice) => setState({ slice: s });
 
   return (
     <div className="flex h-screen w-screen flex-col overflow-hidden bg-background text-foreground">
@@ -79,7 +63,8 @@ export default function Dashboard() {
             <div className="absolute inset-0">
               <ViewBoundary>
                 <CityThree cameraMode={cameraMode} heatmap={heatmap} selectedId={selectedId}
-                  candidates={listed} result={result} timeSec={timeSec} slice={slice} onSelect={select} />
+                  candidates={listed} result={cityResult} timeSec={live.timeSec} slice={slice} onSelect={select}
+                  quality={quality} streets={streets} />
               </ViewBoundary>
             </div>
             {/* The top row takes the height the profile card and time bar leave; the candidate
@@ -91,15 +76,19 @@ export default function Dashboard() {
                 </div>
                 <div className="flex flex-1 flex-col items-center gap-3">
                   <div className="pointer-events-auto">
-                    <CameraSwitch mode={cameraMode} heatmap={heatmap} onMode={setCameraMode} onHeatmap={() => setHeatmap((h) => !h)} />
+                    <CameraSwitch mode={cameraMode} heatmap={heatmap} onMode={setCameraMode} onHeatmap={() => setHeatmap((h) => !h)}
+                      quality={quality} onQuality={() => setQuality((q) => (q === 'high' ? 'fast' : 'high'))}
+                      streets={streets} onStreets={() => setStreets((s) => !s)} />
                   </div>
                   {loading && <Card className="pointer-events-auto px-4 py-2 text-sm text-cyan-300">Running the engine…</Card>}
                 </div>
               </div>
-              <div className="pointer-events-auto self-start"><ProfileCard candidate={candidate} result={result} /></div>
+              <div className="flex items-end justify-between gap-3">
+                <div className="pointer-events-auto"><ProfileCard candidate={candidate} result={result} /></div>
+                <div className="pointer-events-auto"><EventFeed result={live.result} timeSec={live.timeSec} /></div>
+              </div>
               <div className="pointer-events-auto">
-                <TimeBar slice={slice} timeSec={timeSec} playing={playing} result={result}
-                  onSlice={pickSlice} onPlay={() => setState((s) => ({ playing: !s.playing }))} />
+                <LiveBar live={live} slice={slice} scenario={scenario} ready={!loading && candidates.length > 0} onSlice={pickSlice} />
               </div>
             </div>
           </main>

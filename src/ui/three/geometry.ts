@@ -166,6 +166,31 @@ export function sampleTrip(path: readonly TripPoint[], time: number): TripPoint 
     z: a.z + (b.z - a.z) * alpha, time };
 }
 
+/** Instances per trip: a bright head plus fading ghosts at earlier sim times. Fewer ghosts at scale. */
+export function trailLength(tripCount: number) {
+  return tripCount > 600 ? 3 : tripCount > 200 ? 5 : 7;
+}
+/**
+ * Writes the position at `time` along a packed path into out[offset..offset+2], interpolating
+ * between the bracketing points. Returns false outside the recorded interval. No allocation.
+ */
+export function samplePacked(path: Float32Array, time: number, out: Float32Array, offset: number): boolean {
+  const n = path.length / 4;
+  if (n === 0 || time < path[3] || time > path[(n - 1) * 4 + 3]) return false;
+  let low = 0, high = n - 1;
+  while (low < high) {
+    const mid = (low + high) >> 1;
+    if (path[mid * 4 + 3] < time) low = mid + 1; else high = mid;
+  }
+  const b = low * 4, a = Math.max(0, low - 1) * 4;
+  const span = path[b + 3] - path[a + 3];
+  const alpha = span > 0 ? (time - path[a + 3]) / span : 0;
+  out[offset] = path[a] + (path[b] - path[a]) * alpha;
+  out[offset + 1] = path[a + 1] + (path[b + 1] - path[a + 1]) * alpha;
+  out[offset + 2] = path[a + 2] + (path[b + 2] - path[a + 2]) * alpha;
+  return true;
+}
+
 /**
  * Unit (east, north) axis of steepest terrain rise across a point, sampled `step` metres to each
  * side. A side elevation looks perpendicular to it, so the slope shows in profile. The axis always

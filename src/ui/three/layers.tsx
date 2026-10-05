@@ -1,18 +1,18 @@
 // Per-frame scene layers on top of the static city: candidate plates, trips, heat, bottlenecks
 // and stalls. Every size, colour intensity and count derives from the props; nothing is typed in.
 // `lift` is the vertical exaggeration shared with the terrain and building bases.
-import { useLayoutEffect, useMemo, useRef } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useFrame, type ThreeEvent } from '@react-three/fiber';
 import {
   AdditiveBlending, BoxGeometry, BufferGeometry, CanvasTexture, Color, CylinderGeometry,
-  DoubleSide, Float32BufferAttribute, type InstancedMesh, type Mesh, MeshBasicMaterial,
+  DoubleSide, Float32BufferAttribute, type Group, type InstancedMesh, type Mesh, MeshBasicMaterial,
   Object3D, PlaneGeometry, RingGeometry, ShapeGeometry, SphereGeometry,
 } from 'three';
 import type { Bottleneck, Candidate, PersonaId, SimulationResult, TimeSlice } from '../../contracts';
 import type { CityModel } from './city';
 import {
-  footprintShape, heatColor, openRing, project, ringCenter, sampleElevation, sampleTrip,
-  stallGrid, toWorld, unproject, type LngLat, type TripPoint,
+  footprintShape, heatColor, openRing, project, ringCenter, sampleElevation, samplePacked,
+  stallGrid, trailLength, toWorld, unproject, type LngLat,
 } from './geometry';
 
 export const PERSONA_COLORS: Record<PersonaId, string> = {
@@ -44,9 +44,6 @@ export function siteAnchor(city: CityModel, candidate: Candidate, lift: number):
 /** Height of the selected site's light beam; the label sits just above it. */
 export const BEAM_M = 120;
 const scratch = new Object3D();
-const hidden = new Object3D();
-hidden.scale.setScalar(0);
-hidden.updateMatrix();
 
 /** Selected and rank-one sites glow brightest; failed sites stay a dim rose. */
 function candidateColor(candidate: Candidate, selected: boolean, maxRank: number) {
@@ -81,6 +78,8 @@ function CandidateSite({ city, candidate, selected, maxRank, lift, onSelect }: {
   }, [city, candidate, lift]);
   useLayoutEffect(() => () => { shape.dispose(); outline.dispose(); }, [shape, outline]);
   const color = candidateColor(candidate, selected, maxRank);
+  // The selected outline and beam are HDR (above the bloom threshold); other sites stay calm.
+  const outlineColor = selected ? color.clone().multiplyScalar(2.6) : color;
   const base = selected ? 0.5 : candidate.passedFilter ? 0.28 : 0.14;
   useFrame(({ clock }) => {
     if (plate.current) plate.current.opacity = selected ? base + 0.18 * Math.sin(clock.elapsedTime * 2.4) : base;
@@ -100,14 +99,14 @@ function CandidateSite({ city, candidate, selected, maxRank, lift, onSelect }: {
           depthWrite={false} blending={AdditiveBlending} toneMapped={false} />
       </mesh>
       <lineLoop geometry={outline} renderOrder={10}>
-        <lineBasicMaterial color={color} transparent opacity={selected ? 1 : 0.75}
+        <lineBasicMaterial color={outlineColor} transparent opacity={selected ? 1 : 0.75}
           depthTest={false} toneMapped={false} />
       </lineLoop>
       {/* The name label is a DOM overlay owned by CityThree (LabelAnchor), not drei <Html>. */}
       {selected && (
         <mesh position={[center[0], center[1] + BEAM_M / 2, center[2]]}>
           <cylinderGeometry args={[1.2, 5, BEAM_M, 16, 1, true]} />
-          <meshBasicMaterial color={color} transparent opacity={0.22} blending={AdditiveBlending}
+          <meshBasicMaterial color={outlineColor} transparent opacity={0.16} blending={AdditiveBlending}
             depthWrite={false} side={DoubleSide} toneMapped={false} />
         </mesh>
       )}
@@ -129,52 +128,79 @@ export function Candidates({ city, candidates, selectedId, lift, onSelect }: {
   );
 }
 
-const TRAIL = 7;
 const TRAIL_STEP_S = 5;
+/** HDR gain on the head colour, so agents clear the bloom threshold and glow. */
+const HEAD_GAIN = 2.4;
+const TRIP_RADIUS_M = 1.8;
 
-/** Instanced agent dots: a bright head plus fading ghosts at earlier sim times. */
+/** Flat [x, y, z, t] per path point, in world axes on the (lifted) terrain. */
+function packPath(city: CityModel, path: [number, number, number][], lift: number) {
+  const out = new Float32Array(path.length * 4);
+  path.forEach(([lng, lat, t], i) => {
+    const [x, y, z] = toWorld([lng, lat], city.frame, ground(city, [lng, lat], lift) + 1.6);
+    out.set([x, y, z, t], i * 4);
+  });
+  return out;
+}
+
+/**
+ * Agents as one instanced mesh sized for thousands of trips. Each frame the visible instances are
+ * packed to the front (matrix and colour written straight into the instance buffers), so hidden
+ * agents cost nothing and positions interpolate continuously between path points.
+ */
 export function Trips({ city, trips, timeSec, lift }: {
   city: CityModel; trips: SimulationResult['trips']; timeSec: number; lift: number;
 }) {
   const mesh = useRef<InstancedMesh>(null);
   const time = useRef(timeSec);
   time.current = timeSec;
-  const paths = useMemo(() => trips.map((trip) => trip.path.map(([lng, lat, t]): TripPoint => {
-    const [x, y, z] = toWorld([lng, lat], city.frame, ground(city, [lng, lat], lift) + 1.6);
-    return { x, y, z, time: t };
-  })), [city, trips, lift]);
-  const count = Math.max(1, trips.length * TRAIL);
-  useLayoutEffect(() => {
-    const target = mesh.current;
-    if (!target) return;
+  const trail = trailLength(trips.length);
+  const paths = useMemo(() => trips.map((trip) => packPath(city, trip.path, lift)), [city, trips, lift]);
+  const count = Math.max(1, trips.length * trail);
+  /** Base colour per trip and trail step, HDR for the head. */
+  const palette = useMemo(() => {
+    const out = new Float32Array(trips.length * trail * 3);
     const color = new Color();
     trips.forEach((trip, i) => {
-      for (let k = 0; k < TRAIL; k++) {
-        color.set(PERSONA_COLORS[trip.persona] ?? '#e5e7eb').multiplyScalar((1 - k / TRAIL) ** 1.6 * 1.4);
-        target.setColorAt(i * TRAIL + k, color);
+      for (let k = 0; k < trail; k++) {
+        color.set(PERSONA_COLORS[trip.persona] ?? '#e5e7eb').multiplyScalar(k === 0 ? HEAD_GAIN : 1.1 * (1 - k / trail) ** 1.5);
+        color.toArray(out, (i * trail + k) * 3);
       }
     });
-    if (target.instanceColor) target.instanceColor.needsUpdate = true;
-  }, [trips, count]);
+    return out;
+  }, [trips, trail]);
+  const point = useMemo(() => new Float32Array(3), []);
+  useLayoutEffect(() => {
+    // setColorAt allocates the instance colour buffer; the frame loop then writes it directly.
+    const target = mesh.current;
+    if (target && !target.instanceColor) target.setColorAt(0, new Color());
+  }, [count]);
   useFrame(() => {
     const target = mesh.current;
-    if (!target) return;
-    paths.forEach((path, i) => {
-      for (let k = 0; k < TRAIL; k++) {
-        const p = sampleTrip(path, time.current - k * TRAIL_STEP_S);
-        if (!p) { target.setMatrixAt(i * TRAIL + k, hidden.matrix); continue; }
-        scratch.position.set(p.x, p.y, p.z);
-        scratch.scale.setScalar(k === 0 ? 1 : 0.85 - (0.5 * k) / TRAIL);
-        scratch.updateMatrix();
-        target.setMatrixAt(i * TRAIL + k, scratch.matrix);
+    if (!target || !target.instanceColor) return;
+    const matrices = target.instanceMatrix.array as Float32Array;
+    const colors = target.instanceColor.array as Float32Array;
+    let visible = 0;
+    for (let i = 0; i < paths.length; i++) {
+      for (let k = 0; k < trail; k++) {
+        if (!samplePacked(paths[i], time.current - k * TRAIL_STEP_S, point, 0)) continue;
+        const scale = TRIP_RADIUS_M * (k === 0 ? 1 : 0.8 - (0.45 * k) / trail);
+        const m = visible * 16;
+        matrices.fill(0, m, m + 16);
+        matrices[m] = matrices[m + 5] = matrices[m + 10] = scale;
+        matrices[m + 12] = point[0]; matrices[m + 13] = point[1]; matrices[m + 14] = point[2]; matrices[m + 15] = 1;
+        const c = (i * trail + k) * 3;
+        colors[visible * 3] = palette[c]; colors[visible * 3 + 1] = palette[c + 1]; colors[visible * 3 + 2] = palette[c + 2];
+        visible++;
       }
-    });
-    target.count = trips.length * TRAIL;
+    }
+    target.count = visible;
     target.instanceMatrix.needsUpdate = true;
+    target.instanceColor.needsUpdate = true;
   });
   return (
     <instancedMesh key={count} ref={mesh} args={[undefined, undefined, count]} frustumCulled={false}>
-      <sphereGeometry args={[2, 10, 8]} />
+      <icosahedronGeometry args={[1, 1]} />
       <meshBasicMaterial blending={AdditiveBlending} transparent depthWrite={false} toneMapped={false} />
     </instancedMesh>
   );
@@ -197,10 +223,23 @@ function radialGlow() {
   return glowTexture;
 }
 
-/** Heat for one slice: a ground-draped glow disc and a light column per weighted point. */
-export function Heat({ city, heat, lift }: { city: CityModel; heat: [number, number, number][]; lift: number }) {
+type HeatPoint = [number, number, number];
+/** Seconds a heat layer takes to fade in or out when the slice or the toggle changes. */
+const HEAT_FADE_S = 0.6;
+
+/**
+ * Heat for one slice: a ground-draped glow disc and a light column per weighted point. Opacity
+ * ramps toward 1 while `live` and toward 0 after, then the layer reports itself done.
+ */
+function HeatLayer({ city, heat, lift, live, onDone }: {
+  city: CityModel; heat: HeatPoint[]; lift: number; live: boolean; onDone: () => void;
+}) {
   const discs = useRef<InstancedMesh>(null);
   const columns = useRef<InstancedMesh>(null);
+  const discMaterial = useRef<MeshBasicMaterial>(null);
+  const columnMaterial = useRef<MeshBasicMaterial>(null);
+  const fade = useRef(0);
+  const done = useRef(false);
   const count = Math.max(1, heat.length);
   const discGeometry = useMemo(() => new PlaneGeometry(1, 1).rotateX(-Math.PI / 2), []);
   const columnGeometry = useMemo(() => new BoxGeometry(1, 1, 1).translate(0, 0.5, 0), []);
@@ -217,12 +256,12 @@ export function Heat({ city, heat, lift }: { city: CityModel; heat: [number, num
       scratch.scale.set(14 + 26 * t, 1, 14 + 26 * t);
       scratch.updateMatrix();
       discs.current?.setMatrixAt(i, scratch.matrix);
-      discs.current?.setColorAt(i, color.clone().multiplyScalar(0.35 + 0.65 * t));
+      discs.current?.setColorAt(i, color.clone().multiplyScalar(0.5 + 1.1 * t));
       scratch.position.set(x, y, z);
       scratch.scale.set(2.2, 3 + 45 * t, 2.2);
       scratch.updateMatrix();
       columns.current?.setMatrixAt(i, scratch.matrix);
-      columns.current?.setColorAt(i, color.clone().multiplyScalar(0.25 + 0.75 * t));
+      columns.current?.setColorAt(i, color.clone().multiplyScalar(0.4 + 1.6 * t));
     });
     for (const target of [discs.current, columns.current]) {
       if (!target) continue;
@@ -231,21 +270,57 @@ export function Heat({ city, heat, lift }: { city: CityModel; heat: [number, num
       if (target.instanceColor) target.instanceColor.needsUpdate = true;
     }
   }, [city, heat, count, lift]);
+  useFrame((_, delta) => {
+    const step = Math.min(delta, 0.1) / HEAT_FADE_S;
+    fade.current = Math.max(0, Math.min(1, fade.current + (live ? step : -step)));
+    const eased = fade.current * fade.current * (3 - 2 * fade.current);
+    if (discMaterial.current) discMaterial.current.opacity = eased;
+    if (columnMaterial.current) columnMaterial.current.opacity = 0.55 * eased;
+    if (!live && fade.current === 0 && !done.current) { done.current = true; onDone(); }
+  });
   return (
     <group name="heat">
       <instancedMesh key={`d${count}`} ref={discs} args={[discGeometry, undefined, count]} frustumCulled={false}>
-        <meshBasicMaterial map={radialGlow()} transparent blending={AdditiveBlending} depthWrite={false}
-          toneMapped={false} />
+        <meshBasicMaterial ref={discMaterial} map={radialGlow()} transparent opacity={0} blending={AdditiveBlending}
+          depthWrite={false} toneMapped={false} />
       </instancedMesh>
       <instancedMesh key={`c${count}`} ref={columns} args={[columnGeometry, undefined, count]} frustumCulled={false}>
-        <meshBasicMaterial transparent opacity={0.55} blending={AdditiveBlending} depthWrite={false}
+        <meshBasicMaterial ref={columnMaterial} transparent opacity={0} blending={AdditiveBlending} depthWrite={false}
           toneMapped={false} />
       </instancedMesh>
     </group>
   );
 }
 
+/**
+ * Cross-fades heat layers: a new slice (or switching the heatmap on) fades a layer in while the
+ * previous one fades out; switching off fades the last layer out.
+ */
+export function Heat({ city, heat, lift, visible }: { city: CityModel; heat: HeatPoint[]; lift: number; visible: boolean }) {
+  const shown = visible && heat.length > 0 ? heat : null;
+  const next = useRef(0);
+  const [layers, setLayers] = useState<{ id: number; heat: HeatPoint[]; live: boolean }[]>([]);
+  useEffect(() => {
+    setLayers((previous) => {
+      const kept = previous.map((layer) => (layer.heat === shown ? layer : { ...layer, live: false }));
+      if (!shown || kept.some((layer) => layer.heat === shown && layer.live)) return kept;
+      return [...kept, { id: next.current++, heat: shown, live: true }];
+    });
+  }, [shown]);
+  return (
+    <>
+      {layers.map((layer) => (
+        <HeatLayer key={layer.id} city={city} heat={layer.heat} lift={lift} live={layer.live}
+          onDone={() => setLayers((previous) => previous.filter((l) => l.id !== layer.id))} />
+      ))}
+    </>
+  );
+}
+
 const markerSphere = new SphereGeometry(1, 16, 12);
+/** HDR reds: bottlenecks are emissive and bloom. */
+const BOTTLENECK_CORE = new Color('#ef4444').multiplyScalar(2.8);
+const BOTTLENECK_RING = new Color('#f87171').multiplyScalar(1.8);
 const markerRing = new RingGeometry(0.8, 1, 48).rotateX(-Math.PI / 2);
 const markerBeam = new CylinderGeometry(0.4, 0.4, 1, 8, 1, true).translate(0, 0.5, 0);
 
@@ -259,7 +334,12 @@ function BottleneckMarker({ city, bottleneck, phase, lift }: {
   const y = ground(city, point, lift);
   const severity = Math.max(0, Math.min(1, bottleneck.severity));
   const radius = 2.5 + 5 * severity;
-  useFrame(({ clock }) => {
+  const group = useRef<Group>(null);
+  const grow = useRef(0);
+  useFrame(({ clock }, delta) => {
+    // Markers grow in over half a second when a slice brings them in.
+    grow.current = Math.min(1, grow.current + Math.min(delta, 0.1) / 0.5);
+    group.current?.scale.setScalar(1 - (1 - grow.current) ** 3);
     const wave = (clock.elapsedTime * 0.8 + phase) % 1;
     if (ring.current) {
       ring.current.scale.setScalar(radius * (1.2 + 3.5 * wave));
@@ -268,12 +348,12 @@ function BottleneckMarker({ city, bottleneck, phase, lift }: {
     if (core.current) core.current.scale.setScalar(radius * (0.85 + 0.15 * Math.sin(clock.elapsedTime * 5 + phase * 6.28)));
   });
   return (
-    <group position={[x, y, z]}>
+    <group ref={group} position={[x, y, z]} scale={0}>
       <mesh ref={core} geometry={markerSphere} position-y={radius + 1}>
-        <meshBasicMaterial color="#ef4444" toneMapped={false} />
+        <meshBasicMaterial color={BOTTLENECK_CORE} toneMapped={false} />
       </mesh>
       <mesh ref={ring} geometry={markerRing} position-y={0.6}>
-        <meshBasicMaterial color="#f87171" transparent blending={AdditiveBlending} depthWrite={false}
+        <meshBasicMaterial color={BOTTLENECK_RING} transparent blending={AdditiveBlending} depthWrite={false}
           side={DoubleSide} toneMapped={false} />
       </mesh>
       <mesh geometry={markerBeam} scale={[1, 20 + 60 * severity, 1]}>

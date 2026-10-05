@@ -1,7 +1,7 @@
 import { useEffect, useRef, type ReactNode } from 'react';
 import type { Brief, Candidate, Scenario, SimulationResult, TimeSlice } from '../../contracts';
 import { formatClock, gini } from '../../sim/metrics';
-import type { CameraMode } from '../three/CityThree';
+import type { CameraMode, Quality } from '../three/CityThree';
 import { KIND_LABEL, PERSONAS, SCENARIO_LABEL, SLICE_IDS, failingPersona, sliceParts, type Ranked } from './model';
 import { Accent, B, Card, DASH, Label } from './ui';
 
@@ -127,23 +127,39 @@ const MODES: { mode: CameraMode; label: string; aria: string }[] = [
   { mode: 'top', label: 'Top-Down Grid', aria: 'Top-Down Grid' },
 ];
 
-export function CameraSwitch({ mode, heatmap, onMode, onHeatmap }: {
+export function CameraSwitch({ mode, heatmap, onMode, onHeatmap, quality, onQuality, streets, onStreets }: {
   mode: CameraMode; heatmap: boolean; onMode: (m: CameraMode) => void; onHeatmap: () => void;
+  quality?: Quality; onQuality?: () => void; streets?: boolean; onStreets?: () => void;
 }) {
-  const base = 'rounded-lg px-4 py-1.5 text-sm font-semibold transition';
+  const base = 'rounded-lg px-3 py-1.5 text-sm font-semibold transition';
+  const off = 'border-transparent text-muted hover:text-foreground';
   return (
-    <Card className="flex gap-1 p-1.5" testId="camera-switch">
+    <Card className="flex flex-wrap items-center justify-center gap-1 p-1.5" testId="camera-switch">
       {MODES.map((m) => (
         <button key={m.mode} type="button" data-testid={`camera-${m.mode}`} aria-label={m.aria} aria-pressed={mode === m.mode}
           onClick={() => onMode(m.mode)}
-          className={`${base} ${mode === m.mode ? 'border border-cyan-400/70 bg-cyan-400/15 text-foreground' : 'border border-transparent text-muted hover:text-foreground'}`}>
+          className={`${base} ${mode === m.mode ? 'border border-cyan-400/70 bg-cyan-400/15 text-foreground' : `border ${off}`}`}>
           {m.label}
         </button>
       ))}
+      <span className="mx-1 h-5 w-px bg-border" aria-hidden="true" />
       <button type="button" data-testid="heatmap-toggle" aria-pressed={heatmap} onClick={onHeatmap}
-        className={`${base} border ${heatmap ? 'border-vendor/60 bg-vendor/15 text-foreground' : 'border-transparent text-muted hover:text-foreground'}`}>
+        className={`${base} border ${heatmap ? 'border-vendor/60 bg-vendor/15 text-foreground' : off}`}>
         Heatmap: {heatmap ? 'ON' : 'OFF'}
       </button>
+      {onStreets && (
+        <button type="button" data-testid="streets-toggle" aria-pressed={streets} onClick={onStreets}
+          className={`${base} border ${streets ? 'border-cyan-400/50 bg-cyan-400/10 text-foreground' : off}`}>
+          Streets: {streets ? 'ON' : 'OFF'}
+        </button>
+      )}
+      {onQuality && (
+        <button type="button" data-testid="quality-toggle" aria-pressed={quality === 'high'} onClick={onQuality}
+          aria-label={`Render quality ${quality === 'high' ? 'High' : 'Fast'}`}
+          className={`${base} border ${quality === 'high' ? 'border-cyan-400/50 bg-cyan-400/10 text-foreground' : off}`}>
+          Quality: {quality === 'high' ? 'High' : 'Fast'}
+        </button>
+      )}
     </Card>
   );
 }

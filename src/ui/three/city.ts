@@ -1,20 +1,23 @@
 // Loads the terrain and LoD2 buildings once and turns them into a handful of merged three.js
 // objects in the local metric frame (x east, y up = elevation − baseElevation, z = −north).
+// The look is a stylised massing model: matte slate terrain with elevation contours decoded from
+// the DGM1 raster in the shader, and light matte buildings with crisp, subtle edges.
 import {
-  BackSide, BufferGeometry, Color, DoubleSide, EdgesGeometry, Float32BufferAttribute, Group,
-  LineBasicMaterial, LineSegments, Mesh, MeshDepthMaterial, MeshStandardMaterial, PlaneGeometry,
-  SRGBColorSpace, Texture, TextureLoader, Vector2,
+  BackSide, BufferGeometry, ClampToEdgeWrapping, Color, DataTexture, DataUtils, DoubleSide, EdgesGeometry,
+  Float32BufferAttribute, Group, HalfFloatType, LinearFilter, LineBasicMaterial, LineSegments, Mesh,
+  MeshDepthMaterial, MeshStandardMaterial, PlaneGeometry, RedFormat, Vector2, Vector4,
   type WebGLProgramParametersWithUniforms,
 } from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import {
-  createLocalFrame, extrudeFootprint, project, sampleElevation, TERRARIUM,
+  createLocalFrame, decodeTerrarium, extrudeFootprint, project, sampleElevation, TERRARIUM,
   type Bounds, type ElevationDecoder, type ElevationRaster, type LngLat, type LocalFrame,
 } from './geometry';
+import { eaveHeight, loadRoofs, type RoofMap } from './roofs';
 
 interface TerrainMetadata {
   bounds: Bounds; baseElevation: number; elevationDecoder?: ElevationDecoder;
-  elevation?: { url: string }; texture?: { url: string };
+  elevation?: { url: string };
 }
 interface BuildingRecord { id: string; polygon: [number, number, number][][]; h: number; roof?: string }
 interface BuildingsAsset { baseElevation: number; buildings: BuildingRecord[] }
@@ -38,12 +41,19 @@ export interface CityModel {
   buildings: Group;
   buildingCount: number;
   uniforms: CityUniforms;
+  /** Buildings carrying real roof geometry; 0 until upgradeRoofs resolves with data. */
+  roofCount: number;
+  /** Source records, kept so the roof upgrade can rebuild the merged tiles. */
+  asset: BuildingsAsset;
 }
 
 const TILE_M = 600;
 const TERRAIN_SEGMENTS = 256;
+/** Contour intervals in metres of absolute elevation. */
+const CONTOUR_MINOR_M = 1;
+const CONTOUR_MAJOR_M = 5;
 
-function assetUrl(path: string) {
+export function assetUrl(path: string) {
   const relative = path.replace(/^\//, '');
   return `${import.meta.env.BASE_URL}${relative}`;
 }
@@ -73,13 +83,87 @@ async function loadRaster(path: string, bounds: Bounds, decoder: ElevationDecode
 
 const yieldToBrowser = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
-function buildTerrain(raster: ElevationRaster, frame: LocalFrame, texture: Texture) {
+/**
+ * Decoded elevation (metres above baseElevation) as a half-float texture at half the raster
+ * resolution, 2×2 box-filtered so the 1 m contours do not trace DGM1 noise. Row 0 is the north
+ * edge, matching the raster, and the texture is not flipped.
+ */
+function heightTexture(raster: ElevationRaster) {
+  const width = Math.max(1, raster.width >> 1), height = Math.max(1, raster.height >> 1);
+  const data = new Uint16Array(width * height);
+  const at = (col: number, row: number) => {
+    const i = (Math.min(row, raster.height - 1) * raster.width + Math.min(col, raster.width - 1)) * 4;
+    return decodeTerrarium(raster.pixels[i], raster.pixels[i + 1], raster.pixels[i + 2], raster.decoder);
+  };
+  let low = Infinity, high = -Infinity;
+  for (let row = 0; row < height; row++) {
+    for (let col = 0; col < width; col++) {
+      const h = (at(2 * col, 2 * row) + at(2 * col + 1, 2 * row) + at(2 * col, 2 * row + 1) + at(2 * col + 1, 2 * row + 1)) / 4;
+      if (h < low) low = h;
+      if (h > high) high = h;
+      data[row * width + col] = DataUtils.toHalfFloat(h);
+    }
+  }
+  const texture = new DataTexture(data, width, height, RedFormat, HalfFloatType);
+  texture.magFilter = texture.minFilter = LinearFilter;
+  texture.wrapS = texture.wrapT = ClampToEdgeWrapping;
+  texture.generateMipmaps = false;
+  texture.needsUpdate = true;
+  return { texture, range: new Vector2(low, high) };
+}
+
+function terrainMaterial(raster: ElevationRaster, baseElevation: number, rect: Vector4) {
+  const { texture, range } = heightTexture(raster);
+  const uniforms = {
+    uHeight: { value: texture },
+    uHeightSize: { value: new Vector2(texture.image.width, texture.image.height) },
+    uBaseElevation: { value: baseElevation },
+    uHeightRange: { value: range },
+    /** West x, north n, width and depth of the raster in metres. */
+    uTerrainRect: { value: rect },
+    uContourColor: { value: new Color('#5cc8f0') },
+  };
+  const material = new MeshStandardMaterial({ color: new Color('#1b2a3f'), roughness: 0.97, metalness: 0 });
+  material.onBeforeCompile = (shader) => {
+    Object.assign(shader.uniforms, uniforms);
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', '#include <common>\nuniform vec4 uTerrainRect;\nvarying vec2 vTerrain;')
+      // Local position is (east, elevation, −north) before the lift scale: x and z map onto the raster.
+      .replace('#include <begin_vertex>', `#include <begin_vertex>
+vTerrain = vec2((position.x - uTerrainRect.x) / uTerrainRect.z, (uTerrainRect.y + position.z) / uTerrainRect.w);`);
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', `#include <common>
+uniform sampler2D uHeight; uniform vec2 uHeightSize; uniform float uBaseElevation; uniform vec2 uHeightRange;
+uniform vec3 uContourColor;
+varying vec2 vTerrain;
+// Anti-aliased iso-line of h every interval metres; fades out where lines crowd below a pixel.
+float contourLine(float h, float interval, float width) {
+  float v = h / interval;
+  float w = max(fwidth(v), 1e-5);
+  float d = abs(fract(v - 0.5) - 0.5);
+  return (1.0 - smoothstep(0.0, w * width, d)) * (1.0 - smoothstep(0.12, 0.45, w));
+}`)
+      .replace('#include <color_fragment>', `#include <color_fragment>
+vec2 terrainUv = (clamp(vTerrain * uHeightSize, vec2(0.0), uHeightSize - 1.0) + 0.5) / uHeightSize;
+float terrainRel = texture2D(uHeight, terrainUv).r;
+float terrainT = clamp((terrainRel - uHeightRange.x) / max(uHeightRange.y - uHeightRange.x, 1e-3), 0.0, 1.0);
+diffuseColor.rgb *= mix(0.72, 1.35, terrainT);
+float terrainLines = max(contourLine(terrainRel + uBaseElevation, ${CONTOUR_MINOR_M.toFixed(1)}, 1.0) * 0.35,
+  contourLine(terrainRel + uBaseElevation, ${CONTOUR_MAJOR_M.toFixed(1)}, 1.5));`)
+      .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
+totalEmissiveRadiance += uContourColor * terrainLines * 0.22;`);
+  };
+  return material;
+}
+
+function buildTerrain(raster: ElevationRaster, frame: LocalFrame, baseElevation: number) {
   const [west, south, east, north] = raster.bounds;
   const [x0, n0] = project([west, south], frame), [x1, n1] = project([east, north], frame);
   const width = x1 - x0, depth = n1 - n0;
   const geometry = new PlaneGeometry(width, depth, TERRAIN_SEGMENTS, TERRAIN_SEGMENTS);
+  geometry.deleteAttribute('uv');
   const positions = geometry.getAttribute('position');
-  // PlaneGeometry rows run top (north) to bottom; uv v = 1 on the north edge matches flipY.
+  // PlaneGeometry rows run top (north) to bottom.
   for (let row = 0; row <= TERRAIN_SEGMENTS; row++) {
     const lat = north - (row / TERRAIN_SEGMENTS) * (north - south);
     for (let col = 0; col <= TERRAIN_SEGMENTS; col++) {
@@ -91,14 +175,7 @@ function buildTerrain(raster: ElevationRaster, frame: LocalFrame, texture: Textu
   positions.needsUpdate = true;
   geometry.computeVertexNormals();
   geometry.computeBoundingSphere();
-  texture.colorSpace = SRGBColorSpace;
-  // Night look: the aerial photo multiplied into deep blue, with a faint emissive copy so
-  // streets and roofs stay legible under the dim lights.
-  const material = new MeshStandardMaterial({
-    map: texture, color: new Color('#5d7fae'), roughness: 0.95, metalness: 0.05,
-    emissive: new Color('#0d2a52'), emissiveMap: texture, emissiveIntensity: 0.55,
-  });
-  const mesh = new Mesh(geometry, material);
+  const mesh = new Mesh(geometry, terrainMaterial(raster, baseElevation, new Vector4(x0, n1, width, depth)));
   mesh.receiveShadow = true;
   mesh.name = 'terrain';
   return { mesh, width, depth };
@@ -108,22 +185,23 @@ function buildTerrain(raster: ElevationRaster, frame: LocalFrame, texture: Textu
 function injectLift(shader: WebGLProgramParametersWithUniforms, uniforms: CityUniforms, extra = '') {
   Object.assign(shader.uniforms, uniforms);
   shader.vertexShader = shader.vertexShader
-    .replace('#include <common>', '#include <common>\nattribute float aBase;\nuniform float uLift;\nvarying vec3 vFocusWorld;')
+    .replace('#include <common>', '#include <common>\nattribute float aBase;\nuniform float uLift;\nvarying vec3 vFocusWorld;\nvarying float vBase;')
     .replace('#include <begin_vertex>',
-      `#include <begin_vertex>\ntransformed.y += (uLift - 1.0) * aBase;${extra}`);
+      `#include <begin_vertex>\nvBase = aBase;\ntransformed.y += (uLift - 1.0) * aBase;${extra}`);
 }
 
 function injectFocus(shader: WebGLProgramParametersWithUniforms, uniforms: CityUniforms, fragment: string) {
-  // The glow reads true heights, so the lift is taken back out of vFocusWorld.
+  // The glow and the height gradient read true heights, so the lift is taken back out of vFocusWorld.
   injectLift(shader, uniforms,
     '\nvFocusWorld = (modelMatrix * vec4(transformed, 1.0)).xyz;\nvFocusWorld.y -= (uLift - 1.0) * aBase;');
   shader.fragmentShader = shader.fragmentShader
     .replace('#include <common>', `#include <common>
 varying vec3 vFocusWorld;
+varying float vBase;
 uniform vec2 uFocus; uniform float uFocusRadius; uniform float uFocusStrength;
 float focusAmount() {
   float d = distance(vFocusWorld.xz, uFocus);
-  return uFocusStrength * (1.0 - smoothstep(uFocusRadius * 0.25, uFocusRadius, d));
+  return uFocusStrength * (1.0 - smoothstep(uFocusRadius * 0.35, uFocusRadius, d));
 }`)
     .replace(fragment.split('\n')[0], fragment);
 }
@@ -131,31 +209,36 @@ float focusAmount() {
 function buildingMaterials(uniforms: CityUniforms) {
   // Double-sided so a section cut (side view) shows the far walls of sliced buildings instead of
   // hollow shells; shadows keep the single-sided back-face casting.
-  const glass = new MeshStandardMaterial({
-    color: new Color('#16263f'), roughness: 0.42, metalness: 0.35,
-    emissive: new Color('#071426'), emissiveIntensity: 1, side: DoubleSide, shadowSide: BackSide,
+  const massing = new MeshStandardMaterial({
+    color: new Color('#c9d3e0'), roughness: 0.9, metalness: 0, side: DoubleSide, shadowSide: BackSide,
   });
-  glass.onBeforeCompile = (shader) => injectFocus(shader, uniforms, `#include <emissivemap_fragment>
+  // Contact shading darkens the first metres above the base, a gentle gradient lightens taller
+  // masses, and the selected site's block takes a cyan tint with a faint glow.
+  massing.onBeforeCompile = (shader) => injectFocus(shader, uniforms, `#include <emissivemap_fragment>
 {
   float f = focusAmount();
-  float rise = clamp(vFocusWorld.y / 60.0, 0.0, 1.0);
-  totalEmissiveRadiance += vec3(0.0, 0.05, 0.1) * (1.0 - rise);
-  totalEmissiveRadiance += vec3(0.05, 0.42, 0.62) * f * (0.35 + 0.4 * rise);
-  diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * 1.9 + vec3(0.03, 0.06, 0.09), f);
+  float above = max(vFocusWorld.y - vBase, 0.0);
+  float contact = smoothstep(0.0, 8.0, above);
+  float rise = smoothstep(4.0, 45.0, above);
+  diffuseColor.rgb *= (0.58 + 0.42 * contact) * (0.9 + 0.18 * rise);
+  diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.32, 0.8, 0.95), 0.6 * f);
+  totalEmissiveRadiance += vec3(0.01, 0.16, 0.26) * f * (0.4 + 0.6 * rise);
 }`);
+  // Edges are a dark hairline on the calm city and an HDR cyan (above the bloom threshold) on
+  // the selected block, so only the focus glows.
   const edges = new LineBasicMaterial({
-    color: new Color('#38bdf8'), transparent: true, opacity: 0.16, depthWrite: false,
+    color: new Color('#0c1828'), transparent: true, opacity: 0.32, depthWrite: false,
   });
   edges.onBeforeCompile = (shader) => injectFocus(shader, uniforms, `#include <color_fragment>
 {
   float f = focusAmount();
-  diffuseColor.a = clamp(diffuseColor.a * (1.0 + 4.0 * f), 0.0, 1.0);
-  diffuseColor.rgb += vec3(0.25, 0.55, 0.65) * f;
+  diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.35, 2.2, 2.8), f);
+  diffuseColor.a = mix(diffuseColor.a, 0.95, f);
 }`);
   // Same as the shadow map's default depth material, plus the lift.
   const depth = new MeshDepthMaterial();
   depth.onBeforeCompile = (shader) => injectLift(shader, uniforms);
-  return { glass, edges, depth };
+  return { massing, edges, depth };
 }
 
 /** Per-vertex copy of the building base, read by the uLift shader code. */
@@ -165,37 +248,59 @@ function withBase<T extends BufferGeometry>(geometry: T, zBase: number): T {
   return geometry;
 }
 
-async function buildBuildings(asset: BuildingsAsset, frame: LocalFrame, uniforms: CityUniforms) {
+/** Roof triangle soup in world axes with flat normals, matching the extruded walls' attributes. */
+function roofGeometry(triangles: Float32Array, frame: LocalFrame): BufferGeometry | null {
+  const positions = new Float32Array(triangles.length);
+  for (let i = 0; i < triangles.length; i += 3) {
+    const [x, n] = project([triangles[i], triangles[i + 1]], frame);
+    positions[i] = x; positions[i + 1] = triangles[i + 2]; positions[i + 2] = -n;
+  }
+  const geometry = new BufferGeometry();
+  geometry.setAttribute('position', new Float32BufferAttribute(positions, 3));
+  geometry.computeVertexNormals();
+  return geometry;
+}
+
+async function buildBuildings(asset: BuildingsAsset, frame: LocalFrame, uniforms: CityUniforms, roofs: RoofMap | null) {
   // Edges are built per building so each edge vertex can carry its building's base.
   const tiles = new Map<string, { solids: BufferGeometry[]; edges: BufferGeometry[] }>();
-  let built = 0;
+  let built = 0, roofed = 0;
   for (let i = 0; i < asset.buildings.length; i++) {
     const building = asset.buildings[i];
     const rings = building.polygon?.map((ring) => ring.map(([lng, lat]) => [lng, lat] as LngLat));
     const zBase = building.polygon?.[0]?.[0]?.[2];
+    const roof = roofs?.get(building.id);
+    // With a roof, the walls stop at the eave and the roof triangles close the top.
+    const eave = roof ? eaveHeight(roof) - (zBase ?? 0) : building.h;
+    const wallHeight = roof && eave > 0.5 ? eave : building.h;
     // zBase is already relative to baseElevation; use it as is.
-    const geometry = rings && zBase !== undefined ? safeExtrude(rings, zBase, building.h, frame) : null;
+    const geometry = rings && zBase !== undefined ? safeExtrude(rings, zBase, wallHeight, frame) : null;
     if (geometry) {
       const [x, n] = project(rings![0][0], frame);
       const key = `${Math.floor(x / TILE_M)}:${Math.floor(n / TILE_M)}`;
       const tile = tiles.get(key) ?? { solids: [], edges: [] };
       tile.solids.push(withBase(geometry, zBase!));
       tile.edges.push(withBase(new EdgesGeometry(geometry, 28), zBase!));
+      const top = roof && wallHeight !== building.h ? roofGeometry(roof, frame) : null;
+      if (top) {
+        tile.solids.push(withBase(top, zBase!));
+        tile.edges.push(withBase(new EdgesGeometry(top, 20), zBase!));
+        roofed++;
+      }
       tiles.set(key, tile);
       built++;
     }
     if (i % 600 === 599) await yieldToBrowser();
   }
-  const { glass, edges, depth } = buildingMaterials(uniforms);
-  const group = new Group();
-  group.name = 'buildings';
+  const { massing, edges, depth } = buildingMaterials(uniforms);
+  const meshes: (Mesh | LineSegments)[] = [];
   for (const [key, tile] of [...tiles.entries()].sort(([a], [b]) => a.localeCompare(b))) {
     const merged = mergeGeometries(tile.solids, false);
     const outlines = mergeGeometries(tile.edges, false);
     for (const part of [...tile.solids, ...tile.edges]) part.dispose();
     if (!merged || !outlines) continue;
     merged.computeBoundingSphere();
-    const mesh = new Mesh(merged, glass);
+    const mesh = new Mesh(merged, massing);
     mesh.name = `buildings-${key}`;
     mesh.customDepthMaterial = depth;
     mesh.castShadow = true;
@@ -205,10 +310,10 @@ async function buildBuildings(asset: BuildingsAsset, frame: LocalFrame, uniforms
     const lines = new LineSegments(outlines, edges);
     lines.name = `edges-${key}`;
     lines.raycast = () => {};
-    group.add(mesh, lines);
+    meshes.push(mesh, lines);
     await yieldToBrowser();
   }
-  return { group, built };
+  return { meshes, built, roofed };
 }
 
 function safeExtrude(rings: LngLat[][], zBase: number, h: number, frame: LocalFrame) {
@@ -230,20 +335,20 @@ async function loadCity(): Promise<CityModel> {
   const [west, south, east, north] = terrain.bounds;
   const frame = createLocalFrame([(west + east) / 2, (south + north) / 2]);
   const decoder = terrain.elevationDecoder ?? TERRARIUM;
-  const [raster, texture] = await Promise.all([
-    loadRaster(terrain.elevation?.url ?? '/data/terrain/elevation.png', terrain.bounds, decoder),
-    new TextureLoader().loadAsync(assetUrl(terrain.texture?.url ?? '/data/terrain/texture.jpg')),
-  ]);
+  const raster = await loadRaster(terrain.elevation?.url ?? '/data/terrain/elevation.png', terrain.bounds, decoder);
   const uniforms: CityUniforms = {
-    uFocus: { value: new Vector2(0, 0) }, uFocusRadius: { value: 220 }, uFocusStrength: { value: 0 },
+    uFocus: { value: new Vector2(0, 0) }, uFocusRadius: { value: 140 }, uFocusStrength: { value: 0 },
     uLift: { value: 1 },
   };
-  const ground = buildTerrain(raster, frame, texture);
-  const { group, built } = await buildBuildings(asset, frame, uniforms);
+  const ground = buildTerrain(raster, frame, terrain.baseElevation);
+  const { meshes, built } = await buildBuildings(asset, frame, uniforms, null);
+  const group = new Group();
+  group.name = 'buildings';
+  group.add(...meshes);
   return {
     frame, raster, baseElevation: terrain.baseElevation,
     size: { width: ground.width, depth: ground.depth },
-    terrain: ground.mesh, buildings: group, buildingCount: built, uniforms,
+    terrain: ground.mesh, buildings: group, buildingCount: built, uniforms, roofCount: 0, asset,
   };
 }
 
@@ -259,4 +364,25 @@ export function getCity(): Promise<CityModel> {
     throw error;
   });
   return cached;
+}
+
+let roofed: Promise<number> | null = null;
+
+/**
+ * Swaps the flat-topped tiles for walls plus real roof triangles once roofs3d.json arrives.
+ * Runs after first paint; resolves with the number of roofed buildings (0 when the asset is absent).
+ */
+export function upgradeRoofs(city: CityModel): Promise<number> {
+  roofed ??= (async () => {
+    const roofs = await loadRoofs(assetUrl('/data/roofs3d.json'));
+    if (!roofs) return 0;
+    const { meshes, roofed: count } = await buildBuildings(city.asset, city.frame, city.uniforms, roofs);
+    const old = [...city.buildings.children] as (Mesh | LineSegments)[];
+    city.buildings.remove(...old);
+    city.buildings.add(...meshes);
+    for (const part of old) part.geometry.dispose();
+    city.roofCount = count;
+    return count;
+  })().catch(() => 0);
+  return roofed;
 }

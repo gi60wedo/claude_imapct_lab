@@ -62,14 +62,42 @@ test('three dashboard: camera modes, heatmap, candidate switch, rule zero', asyn
   await expect.poll(() => personaNumbers(page)).not.toEqual(before);
   await page.screenshot({ path: `${SHOTS}/three-second-candidate.png` });
 
+  // Live clock: playing by default; the slice button jumps the clock to the slice start, where
+  // the fixture trips (counted from 05:30) are on their way.
+  const play = page.getByTestId('play');
+  const clock = page.locator('[data-testid=time-bar] [data-bind=timeSec]');
+  await expect(play).toHaveAttribute('aria-pressed', 'true');
   await page.getByTestId('slice-05:30_DELIVERY').click();
   await expect(page.getByTestId('slice-05:30_DELIVERY')).toHaveAttribute('aria-pressed', 'true');
-  const clock = page.locator('[data-testid=time-bar] [data-bind=timeSec]');
+  await expect(clock).toHaveText(/^05:3/);
   const t0 = await clock.textContent();
-  await page.getByTestId('play').click();
   await expect.poll(() => clock.textContent(), { timeout: 5_000 }).not.toBe(t0);
-  await page.getByTestId('play').click();
+
+  // Agents move: two shots of the city a second apart differ while the clock runs.
+  await page.getByTestId('speed-60').click();
+  const city = page.getByTestId('city-three');
+  const shotA = await city.screenshot();
+  await page.waitForTimeout(1000);
+  const shotB = await city.screenshot();
+  expect(shotA.equals(shotB), 'trip dots move between frames while playing').toBe(false);
   await page.screenshot({ path: `${SHOTS}/three-delivery.png` });
+
+  // Pause stops the clock.
+  await play.click();
+  await expect(play).toHaveAttribute('aria-pressed', 'false');
+  const paused = await clock.textContent();
+  await page.waitForTimeout(500);
+  await expect(clock).toHaveText(paused ?? '');
+
+  // A scenario change re-runs the engine for the selected site; the live result follows it.
+  const bar = page.getByTestId('live-bar');
+  const runs = Number(await bar.getAttribute('data-runs'));
+  await page.getByTestId('scenario-RAINY_SAT').click();
+  await expect(page.getByTestId('scenario-RAINY_SAT')).toHaveAttribute('aria-pressed', 'true');
+  await expect(bar).toHaveAttribute('data-live-scenario', 'RAINY_SAT');
+  await expect.poll(async () => Number(await bar.getAttribute('data-runs'))).toBeGreaterThan(runs);
+  await expect(bar).toHaveAttribute('data-blend', '1');
+  await page.screenshot({ path: `${SHOTS}/three-rainy.png` });
 
   expect(await unboundDigits(page), 'every digit on screen must sit inside [data-bind]').toEqual([]);
   expect(errors, 'no console errors').toEqual([]);
