@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
 
 test('what-if scenarios update compare and handle offline scenario', async ({ page }) => {
-  await page.goto('/');
+  await page.goto('/?data=fixtures');
   const compareBtn = page.getByRole('button', { name: 'Compare', exact: true });
   await expect(compareBtn).toBeEnabled();
   await expect(page.getByRole('button', { name: 'Sunny' })).toHaveAttribute('aria-pressed', 'true');

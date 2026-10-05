@@ -11,7 +11,7 @@ test('simulation trails retain data and report rolling FPS', async ({ page }, te
     const url = new URL(route.request().url());
     return ['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname) ? route.continue() : route.abort();
   });
-  await page.goto('/src/ui/controls/sim-harness.html?perf=1&e2e=1');
+  await page.goto('/src/ui/controls/sim-harness.html?perf=1&e2e=1&data=fixtures');
   await expect(page.getByRole('button', { name: 'Pause simulation' })).toBeVisible();
   await expect(page.locator('[data-testid="map"] canvas')).toBeVisible();
   await page.waitForFunction(() => {

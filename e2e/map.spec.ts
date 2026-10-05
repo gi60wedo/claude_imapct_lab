@@ -13,7 +13,7 @@ test('map renders aerial, buildings and candidate tooltips', async ({ page }) =>
   page.on('pageerror', (e) => errors.push(e.message));
 
   await page.setViewportSize({ width: 1600, height: 900 });
-  await page.goto('/?e2e=1');
+  await page.goto('/?e2e=1&data=fixtures');
   const canvas = page.locator('[data-testid="map"] canvas');
   await expect(canvas).toBeVisible();
   await page.waitForFunction(() => !!window.__deck);
