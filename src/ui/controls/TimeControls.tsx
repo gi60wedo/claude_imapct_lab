@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
 import type { TimeSlice } from '../../contracts';
+import { sliceDurationSec } from '../map/simLayers';
 import { getState, setState, useStore } from '../state/store';
 
 const SLICES: { value: TimeSlice; label: string }[] = [
@@ -7,7 +8,6 @@ const SLICES: { value: TimeSlice; label: string }[] = [
   { value: '11:30_PEAK', label: '11:30' },
   { value: '15:00_LULL', label: '15:00' },
 ];
-const DURATION_SEC = 3600;
 const SPEED = 60;
 
 export default function TimeControls() {
@@ -22,7 +22,7 @@ export default function TimeControls() {
       if (!getState().playing) return;
       if (previous !== undefined) {
         const elapsed = (now - previous) / 1000;
-        setState((s) => ({ timeSec: (s.timeSec + elapsed * SPEED) % DURATION_SEC }));
+        setState((s) => ({ timeSec: (s.timeSec + elapsed * SPEED) % sliceDurationSec(s.slice) }));
       }
       previous = now;
       frame = requestAnimationFrame(tick);

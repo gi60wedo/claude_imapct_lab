@@ -4,7 +4,7 @@ import { TripsLayer } from '@deck.gl/geo-layers';
 import { HeatmapLayer } from '@deck.gl/aggregation-layers';
 import { ScatterplotLayer } from '@deck.gl/layers';
 import type { Bottleneck, SimulationResult } from '../../contracts';
-import { buildSimLayers, BOTTLENECKS_LAYER_ID, KIOSKS_LAYER_ID } from '../map/simLayers';
+import { buildSimLayers, BOTTLENECKS_LAYER_ID, KIOSKS_LAYER_ID, sliceDurationSec, sliceTrips } from '../map/simLayers';
 import { startFps } from '../perf/fps';
 import { getState, resultKey, setState } from '../state/store';
 import SimOverlay from './SimOverlay';
@@ -83,17 +83,44 @@ test('layers separate coordinates and timestamps and retain result-owned data', 
   expect(layers.some((layer) => layer.id === KIOSKS_LAYER_ID)).toBe(false);
 });
 
-test('mitigation kiosks use the top three severities without mutating bottlenecks', () => {
+test('text-only fixture kiosks fall back to the top three severities without mutating bottlenecks', () => {
   const data = result();
   data.mitigations = ['Add kiosks'];
   const original = [...data.bySlice['11:30_PEAK'].bottlenecks];
   const kiosk = buildSimLayers(data, '11:30_PEAK', 0).find((layer) => layer.id === KIOSKS_LAYER_ID)!;
-  expect(kiosk.props.data).toEqual([original[3], original[1], original[2]]);
+  expect(kiosk.props.data).toEqual([original[3], original[1], original[2]].map((b) => [b.lng, b.lat]));
   expect(data.bySlice['11:30_PEAK'].bottlenecks).toEqual(original);
 });
 
+test('engine kiosks are drawn at their own coordinates, and none when the engine applied none', () => {
+  const data = result();
+  data.mitigations = ['Express kiosk'];
+  data.kiosks = [[11.0781, 49.4502]];
+  const kiosk = buildSimLayers(data, '11:30_PEAK', 0).find((layer) => layer.id === KIOSKS_LAYER_ID)!;
+  expect(kiosk.props.data).toEqual([[11.0781, 49.4502]]);
+  data.mitigations = ['Delivery window 05:00–07:00'];
+  data.kiosks = [];
+  expect(buildSimLayers(data, '11:30_PEAK', 0).some((layer) => layer.id === KIOSKS_LAYER_ID)).toBe(false);
+});
+
+test('engine trips (seconds since midnight) are split by slice and rebased to the slice clock', () => {
+  const at = (h: number) => h * 3600;
+  const van = { persona: 'vendor' as const, path: [[11.07, 49.45, at(5.6)], [11.08, 49.46, at(6)]] as [number, number, number][] };
+  const shopper = { persona: 'commuter' as const, path: [[11.07, 49.45, at(10.9)], [11.08, 49.46, at(11.2)]] as [number, number, number][] };
+  const delivery = sliceTrips([van, shopper], '05:30_DELIVERY');
+  expect(delivery.map((t) => t.persona)).toEqual(['vendor']);
+  expect(delivery[0].path.map((p) => p[2])).toEqual([360, 1800]);
+  const peak = sliceTrips([van, shopper], '11:30_PEAK');
+  expect(peak.map((t) => t.persona)).toEqual(['commuter']);
+  expect(peak[0].path.map((p) => p[2])).toEqual([-360, 720]);
+  expect(sliceTrips([van, shopper], '15:00_LULL')).toEqual([]);
+  expect(van.path[0][2]).toBe(at(5.6));   // result-owned data is not mutated
+  expect(sliceDurationSec('11:30_PEAK')).toBe(5400);
+  expect(sliceDurationSec('15:00_LULL')).toBe(2700);
+});
+
 test('playback uses one frame loop, advances at 60x, wraps, pauses, and cleans up', () => {
-  setState({ playing: true, timeSec: 3590 });
+  setState({ playing: true, slice: '11:30_PEAK', timeSec: sliceDurationSec('11:30_PEAK') - 10 });
   const mounted = render(<TimeControls />);
   expect(callbacks.size).toBe(1);
   frame(1000);

@@ -41,6 +41,7 @@ export interface SimulationResult {
   bySlice: Record<TimeSlice, { heat: [number, number, number][]; bottlenecks: Bottleneck[] }>;
   stallExposure: number[];                      // visitors per stall slot → fairness
   trips: { persona: PersonaId; path: [number, number, number][] }[];   // [lng, lat, tSec]
+  kiosks?: [number, number][];                  // [lng, lat] of applied kiosk mitigations (additive; engine always sets it)
 }
 
 export interface Brief {

@@ -72,6 +72,8 @@ describe('simulate', () => {
     expect(kiosk.personas.commuter.score).toBeGreaterThanOrEqual(base.personas.commuter.score);
     expect(kiosk.personas.commuter.served).toBeGreaterThanOrEqual(base.personas.commuter.served);
     expect(kiosk.mitigations).toEqual(['Kiosk at Alpha']);
+    expect(kiosk.kiosks).toEqual([at(10, 10)]);
+    expect(base.kiosks).toEqual([]);
   });
 
   it('a loop layout spreads visitors more fairly than clusters at the entrance', () => {

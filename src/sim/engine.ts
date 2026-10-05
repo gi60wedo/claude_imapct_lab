@@ -281,6 +281,7 @@ export function simulate(pw: PreparedWorld, cand: Candidate, opts: SimOptions): 
     }])) as SimulationResult['bySlice'],
     stallExposure: [...slotVisits].map((v) => Math.round(v)),
     trips: sampleTrips(pw, trips, opts.maxTrips ?? 100, fork(seed, `trails:${cand.id}`)),
+    kiosks: mitigations.flatMap((m): [number, number][] => (m.kind === 'kiosk' ? [[m.lng, m.lat]] : [])),
   };
 }
 
