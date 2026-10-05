@@ -11,7 +11,7 @@ from itertools import pairwise
 sys.dont_write_bytecode = True
 
 import numpy as np
-from lod2_buildings import BBOX, ROOT, area_and_centroid, build
+from lod2_buildings import BBOX, ROOT, area_and_centroid, build, self_intersects, signed_area
 from pyproj import Transformer
 
 # Verified centroid count from all four source tiles within the unchanged BBOX.
@@ -33,11 +33,15 @@ def contains(ring: list, point: tuple[float, float]) -> bool:
     return inside
 
 
+def contains_polygon(polygon: list, point: tuple[float, float]) -> bool:
+    return contains(polygon[0], point) and not any(contains(hole, point) for hole in polygon[1:])
+
+
 def overlap(first: list, second: list) -> bool:
-    """Detect polygon overlap through containment and proper edge crossings."""
-    if any(contains(first, tuple(p[:2])) for p in second[:-1]):
+    """Detect overlap with an OSM ring while excluding building courtyards."""
+    if any(contains_polygon(first, tuple(p[:2])) for p in second[:-1]):
         return True
-    if any(contains(second, tuple(p[:2])) for p in first[:-1]):
+    if any(contains(second, tuple(p[:2])) for ring in first for p in ring[:-1]):
         return True
 
     def side(a, b, c):
@@ -45,7 +49,8 @@ def overlap(first: list, second: list) -> bool:
 
     return any(
         side(a, b, c) * side(a, b, d) < 0 and side(c, d, a) * side(c, d, b) < 0
-        for a, b in pairwise(first)
+        for ring in first
+        for a, b in pairwise(ring)
         for c, d in pairwise(second)
     )
 
@@ -97,12 +102,25 @@ def main() -> int:
     print(f"Building-count acceptance floor N={MIN_BUILDINGS}", flush=True)
     stats = build()
     output = ROOT / "public/data/buildings3d.json"
-    buildings = json.loads(output.read_text(encoding="utf-8"))
+    document = json.loads(output.read_text(encoding="utf-8"))
+    assert isinstance(document, dict) and set(document) == {"baseElevation", "buildings"}, "Expected baseElevation metadata and buildings"
+    base = document["baseElevation"]
+    assert not isinstance(base, bool) and isinstance(base, (int, float)) and math.isfinite(base), "Invalid baseElevation metadata"
+    assert base == stats["baseElevation"], "Recorded baseElevation differs from the converter's offset"
+    terrain_path = ROOT / "public/data/terrain/terrain.json"
+    if terrain_path.is_file():
+        terrain_base = json.loads(terrain_path.read_text(encoding="utf-8"))["baseElevation"]
+        assert base == terrain_base, f"Building baseElevation {base} differs from terrain baseElevation {terrain_base}"
+        print(f"PASS baseElevation={base:g} m matches terrain.json", flush=True)
+    else:
+        print(f"PASS recorded baseElevation={base:g} m; terrain.json is absent", flush=True)
+    buildings = document["buildings"]
     assert isinstance(buildings, list) and buildings, "Expected a non-empty JSON array"
     identifiers = set()
     inverse = Transformer.from_crs(4326, 25832, always_xy=True)
     west, south, east, north = BBOX
     boundary_rounding_cases = 0
+    hole_count = 0
     for building in buildings:
         assert set(building) == {"id", "polygon", "h", "roof"}, "Unexpected building schema"
         identifier = building["id"]
@@ -111,30 +129,39 @@ def main() -> int:
         assert isinstance(building["roof"], str) and building["roof"], f"Missing roof type: {identifier}"
         assert isinstance(building["h"], (int, float)) and math.isfinite(building["h"]) and building["h"] >= 0, f"Invalid height: {identifier}"
         polygon = building["polygon"]
-        assert len(polygon) >= 4 and polygon[0] == polygon[-1], f"Unclosed ring: {identifier}"
-        assert len({tuple(p[:2]) for p in polygon[:-1]}) >= 3, f"Collapsed ring: {identifier}"
-        for point in polygon:
-            assert len(point) == 3 and all(isinstance(v, (int, float)) and math.isfinite(v) for v in point), f"Invalid XYZ: {identifier}"
-            assert -180 <= point[0] <= 180 and -90 <= point[1] <= 90, f"Invalid WGS84: {identifier}"
-            assert point[0] == round(point[0], 6) and point[1] == round(point[1], 6), f"Expected six decimal places: {identifier}"
-            assert point[2] == polygon[0][2], f"Non-flat building base: {identifier}"
-        x, y = inverse.transform(*np.asarray(polygon)[:, :2].T)
+        assert isinstance(polygon, list) and polygon, f"Missing outer ring: {identifier}"
+        hole_count += len(polygon) - 1
+        for index, ring in enumerate(polygon):
+            assert len(ring) >= 4 and ring[0] == ring[-1], f"Unclosed ring {index}: {identifier}"
+            assert len({tuple(p[:2]) for p in ring[:-1]}) >= 3, f"Collapsed ring {index}: {identifier}"
+            for point in ring:
+                assert len(point) == 3 and all(isinstance(v, (int, float)) and math.isfinite(v) for v in point), f"Invalid XYZ: {identifier}"
+                assert -180 <= point[0] <= 180 and -90 <= point[1] <= 90, f"Invalid WGS84: {identifier}"
+                assert point[0] == round(point[0], 6) and point[1] == round(point[1], 6), f"Expected six decimal places: {identifier}"
+                assert point[2] == polygon[0][0][2], f"Non-flat building base: {identifier}"
+            array = np.asarray(ring)
+            signed = signed_area(array)
+            assert signed > 0 if index == 0 else signed < 0, f"Incorrect winding in ring {index}: {identifier}"
+            assert not self_intersects(array), f"Self-intersecting ring {index}: {identifier}"
+        x, y = inverse.transform(*np.asarray(polygon[0])[:, :2].T)
         area, centroid = area_and_centroid(np.column_stack((x, y)))
         assert area > 0, f"Degenerate projected ring: {identifier}"
         # Simplification may shift a raw centroid near the clipping boundary.
         assert west - 0.4 <= centroid[0] <= east + 0.4 and south - 0.4 <= centroid[1] <= north + 0.4, f"Centroid outside bbox: {identifier}"
         boundary_rounding_cases += int(not (west <= centroid[0] <= east and south <= centroid[1] <= north))
-    print(f"PASS schema, unique IDs, closed 3D rings, six-decimal WGS84 and bbox ({boundary_rounding_cases} boundary rounding cases)", flush=True)
+    print(f"PASS schema, unique IDs, closed simple 3D rings, CCW outers/CW holes ({hole_count} holes), six-decimal WGS84 and bbox ({boundary_rounding_cases} boundary rounding cases)", flush=True)
 
     names = named_osm_rings()
     print("Five tallest buildings (names come from OSM footprint overlap):", flush=True)
     tallest = sorted(buildings, key=lambda b: (-b["h"], b["id"]))[:5]
+    named_tallest = 0
     for rank, building in enumerate(tallest, start=1):
         labels = sorted({f"{name} [OSM {reference}]" for name, reference, ring in names if overlap(building["polygon"], ring)})
         label = "; ".join(labels) or "no named OSM building overlap"
+        named_tallest += bool(labels)
         print(f"  {rank}. {building['id']}: {building['h']:.3f} m — {label}", flush=True)
 
-    lorenz = [b for b in buildings if contains(b["polygon"], (11.0782, 49.4511))]
+    lorenz = [b for b in buildings if contains_polygon(b["polygon"], (11.0782, 49.4511))]
     lorenz_names = {name for name, _, ring in names for b in lorenz if overlap(b["polygon"], ring)}
     print(f"Lorenzkirche at (11.0782, 49.4511): {[(b['id'], b['h']) for b in lorenz]}; OSM names={sorted(lorenz_names)}", flush=True)
     checks = [
@@ -144,10 +171,12 @@ def main() -> int:
          f"{output.stat().st_size:,} bytes; required below 12,000,000 bytes"),
         ("Lorenzkirche towers", any(b["h"] >= 70 for b in lorenz),
          f"Containing building heights {[b['h'] for b in lorenz]}; required at least 70 m"),
+        ("Lorenzkirche OSM name", any("lorenz" in name.casefold() for name in lorenz_names),
+         f"OSM names {sorted(lorenz_names)}; required a name containing 'Lorenz'"),
         ("converter runtime", stats["seconds"] < 240,
          f"{stats['seconds']:.2f}s; required below 240s"),
-        ("five tallest OSM overlap report", len(tallest) == 5 and bool(names),
-         "Expected five tallest buildings and named OSM building geometry"),
+        ("five tallest OSM overlaps", len(tallest) == 5 and named_tallest >= 3,
+         f"{named_tallest}/5 tallest buildings have named OSM overlaps; required at least 3/5"),
     ]
     failures = []
     for label, passed, detail in checks:

@@ -3,6 +3,8 @@
 Run with uv run --with lxml --with numpy --with pyproj --with pillow
 --with tifffile python prep/scene3d/lod2_buildings.py.
 All source elevations use the DHHN2016 datum; only the shared base is subtracted.
+Output is {baseElevation, buildings}; each building's polygon is [outer, ...holes].
+Outer rings wind counter-clockwise from above; courtyard holes wind clockwise.
 """
 
 from __future__ import annotations
@@ -124,15 +126,25 @@ def area_and_centroid(points: np.ndarray) -> tuple[float, np.ndarray]:
     return abs(double_area) / 2, centroid
 
 
-def ground_ring(building: etree._Element) -> np.ndarray:
-    rings = [
+def polygon_rings(polygon: etree._Element) -> list[np.ndarray]:
+    """Keep interiors attached to their exterior, including solid fallbacks."""
+    outer = polygon.find(GML + "exterior/" + GML + "LinearRing")
+    if outer is None:
+        return []
+    return [read_ring(outer)] + [
         read_ring(ring)
-        for ring in building.findall(
-            ".//" + BLDG + "GroundSurface//" + GML + "exterior/" + GML + "LinearRing"
-        )
+        for ring in polygon.findall(GML + "interior/" + GML + "LinearRing")
     ]
-    if rings:
-        return max(rings, key=lambda ring: area_and_centroid(ring)[0])
+
+
+def ground_polygon(building: etree._Element) -> list[np.ndarray]:
+    footprints = [
+        polygon_rings(polygon)
+        for polygon in building.findall(".//" + BLDG + "GroundSurface//" + GML + "Polygon")
+    ]
+    footprints = [rings for rings in footprints if rings]
+    if footprints:
+        return max(footprints, key=lambda rings: area_and_centroid(rings[0])[0])
 
     # Solids may reference polygons in boundedBy through local xlink IDs.
     polygons = {
@@ -147,18 +159,53 @@ def ground_ring(building: etree._Element) -> np.ndarray:
             if reference.startswith("#") and reference[1:] in polygons:
                 candidates.append(polygons[reference[1:]])
         for polygon in candidates:
-            ring = polygon.find(GML + "exterior/" + GML + "LinearRing")
-            if ring is not None:
-                points = read_ring(ring)
-                if area_and_centroid(points)[0] > 1e-8:
-                    rings.append(points)
-    if not rings:
+            rings = polygon_rings(polygon)
+            if rings and area_and_centroid(rings[0])[0] > 1e-8:
+                footprints.append(rings)
+    if not footprints:
         raise ValueError(f"No ground or solid footprint for {building.get(GML + 'id')}")
     # Prefer a horizontal base to walls which share its lowest vertex.
     return min(
-        rings,
-        key=lambda ring: (float(ring[:, 2].min()), float(np.ptp(ring[:, 2])), -area_and_centroid(ring)[0]),
+        footprints,
+        key=lambda rings: (float(rings[0][:, 2].min()), float(np.ptp(rings[0][:, 2])), -area_and_centroid(rings[0])[0]),
     )
+
+
+def signed_area(points: np.ndarray) -> float:
+    """Positive XY shoelace area means counter-clockwise viewed from above."""
+    xy = np.asarray(points)[:, :2] - points[0][:2]
+    return float(np.sum(xy[:-1, 0] * xy[1:, 1] - xy[1:, 0] * xy[:-1, 1])) / 2
+
+
+def self_intersects(points: np.ndarray) -> bool:
+    """Reject crossings, touches and collinear overlaps of nonadjacent edges."""
+    xy = np.asarray(points, dtype=float)[:, :2]
+    extent = float(np.ptp(xy, axis=0).max())
+    if not extent:
+        return True
+    xy = (xy - xy[0]) / extent
+    n = len(xy) - 1
+    i, j = np.triu_indices(n, k=2)
+    keep = (i != 0) | (j != n - 1)  # Closing neighbours share a vertex.
+    i, j = i[keep], j[keep]
+    a, b, c, d = xy[i], xy[i + 1], xy[j], xy[j + 1]
+    epsilon = 1e-12
+    boxes_overlap = np.all(
+        np.maximum(np.minimum(a, b), np.minimum(c, d))
+        <= np.minimum(np.maximum(a, b), np.maximum(c, d)) + epsilon,
+        axis=1,
+    )
+    a, b, c, d = (p[boxes_overlap] for p in (a, b, c, d))
+
+    def side(start, end, point):
+        edge, relative = end - start, point - start
+        return edge[:, 0] * relative[:, 1] - edge[:, 1] * relative[:, 0]
+
+    ab_c, ab_d = side(a, b, c), side(a, b, d)
+    cd_a, cd_b = side(c, d, a), side(c, d, b)
+    opposite_ab = (np.minimum(ab_c, ab_d) <= epsilon) & (np.maximum(ab_c, ab_d) >= -epsilon)
+    opposite_cd = (np.minimum(cd_a, cd_b) <= epsilon) & (np.maximum(cd_a, cd_b) >= -epsilon)
+    return bool(np.any(opposite_ab & opposite_cd))
 
 
 def _simplify_open(points: np.ndarray, tolerance: float) -> np.ndarray:
@@ -192,9 +239,30 @@ def simplify_ring(points: np.ndarray, tolerance: float = TOLERANCE) -> np.ndarra
     first = _simplify_open(vertices[: split + 1], tolerance)
     second = _simplify_open(np.vstack((vertices[split:], vertices[0])), tolerance)
     simplified = np.vstack((first[:-1], second))
-    if len(simplified) < 4 or area_and_centroid(simplified)[0] <= 1e-8:
+    if len(simplified) < 4 or area_and_centroid(simplified)[0] <= 1e-8 or self_intersects(simplified):
         return points
     return simplified
+
+
+def projected_ring(points: np.ndarray, project: Transformer, z_base: float, *, hole: bool) -> list:
+    """Check topology again after six-decimal projection; retry the source ring."""
+    for candidate in (simplify_ring(points), points):
+        lngs, lats = project.transform(candidate[:, 0], candidate[:, 1])
+        ring = []
+        for lng, lat in zip(lngs, lats):
+            point = [round(float(lng), 6), round(float(lat), 6), z_base]
+            if not ring or point != ring[-1]:
+                ring.append(point)
+        if ring[0] != ring[-1]:
+            ring.append(ring[0].copy())
+        array = np.asarray(ring)
+        area = signed_area(array)
+        if len(ring) < 4 or area == 0 or self_intersects(array):
+            continue
+        if (area > 0) == hole:
+            ring.reverse()
+        return ring
+    raise ValueError("Source footprint is degenerate or self-intersecting after projection")
 
 
 def iter_buildings(tile: Path):
@@ -231,7 +299,8 @@ def build(root: Path = ROOT) -> dict:
         tile_seen = tile_kept = 0
         for building in iter_buildings(tile):
             tile_seen += 1
-            ring = ground_ring(building)
+            rings = ground_polygon(building)
+            ring = rings[0]
             area, centroid = area_and_centroid(ring)
             if area <= 1e-8:
                 raise ValueError(f"Degenerate ground ring in {tile.name}")
@@ -241,7 +310,7 @@ def build(root: Path = ROOT) -> dict:
             if not identifier or identifier in identifiers:
                 raise ValueError(f"Missing or duplicate building ID: {identifier} in {tile.name}")
             identifiers.add(identifier)
-            ground_z = float(ring[:, 2].min())
+            ground_z = min(float(r[:, 2].min()) for r in rings)
             height_text = building.findtext(BLDG + "measuredHeight")
             if height_text is None:
                 all_rings = [read_ring(r) for r in building.iter(GML + "LinearRing")]
@@ -250,20 +319,16 @@ def build(root: Path = ROOT) -> dict:
                 height = float(height_text)
             if not math.isfinite(height) or height < 0:
                 raise ValueError(f"Invalid measuredHeight for {identifier}: {height}")
-            before_vertices += len(ring) - 1
-            simplified = simplify_ring(ring)
-            lngs, lats = project.transform(simplified[:, 0], simplified[:, 1])
-            polygon = []
+            before_vertices += sum(len(r) - 1 for r in rings)
             z_base = round(ground_z - base, 3)
-            for lng, lat in zip(lngs, lats):
-                point = [round(float(lng), 6), round(float(lat), 6), z_base]
-                if not polygon or point != polygon[-1]:
-                    polygon.append(point)
-            if polygon[0] != polygon[-1]:
-                polygon.append(polygon[0].copy())
-            if len(polygon) < 4 or len({tuple(p[:2]) for p in polygon[:-1]}) < 3:
-                raise ValueError(f"Footprint collapsed after rounding: {identifier}")
-            after_vertices += len(polygon) - 1
+            try:
+                polygon = [
+                    projected_ring(r, project, z_base, hole=i > 0)
+                    for i, r in enumerate(rings)
+                ]
+            except ValueError as error:
+                raise ValueError(f"Invalid footprint for {identifier}: {error}") from error
+            after_vertices += sum(len(r) - 1 for r in polygon)
             records.append({
                 "id": identifier,
                 "polygon": polygon,
@@ -280,7 +345,7 @@ def build(root: Path = ROOT) -> dict:
     output = root / "public/data/buildings3d.json"
     output.parent.mkdir(parents=True, exist_ok=True)
     with output.open("w", encoding="utf-8", newline="\n") as handle:
-        json.dump(records, handle, separators=(",", ":"), ensure_ascii=False, allow_nan=False)
+        json.dump({"baseElevation": base, "buildings": records}, handle, separators=(",", ":"), ensure_ascii=False, allow_nan=False)
         handle.write("\n")
     elapsed = time.perf_counter() - started
     print(
