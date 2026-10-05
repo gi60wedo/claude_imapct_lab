@@ -1,0 +1,55 @@
+{
+  "bounds": [
+    11.063772924134373,
+    49.442917541054626,
+    11.093526937536208,
+    49.46231501915734
+  ],
+  "baseElevation": 290,
+  "elevationDecoder": {
+    "rScaler": 256,
+    "gScaler": 1,
+    "bScaler": 0.00390625,
+    "offset": -32768
+  },
+  "crs": "EPSG:4326",
+  "sourceCrs": "EPSG:25832",
+  "verticalDatum": "DHHN2016",
+  "sourceBounds": [
+    649600.0,
+    5478800.0,
+    651700.0,
+    5480900.0
+  ],
+  "pixelOrigin": "center",
+  "rowOrder": "north-to-south",
+  "elevation": {
+    "url": "/data/terrain/elevation.png",
+    "width": 2048,
+    "height": 2048
+  },
+  "texture": {
+    "url": "/data/terrain/texture.jpg",
+    "width": 4096,
+    "height": 4096,
+    "quality": 82,
+    "outsideSourceBounds": "nearest-edge extension"
+  },
+  "heightGrid": {
+    "url": "/data/terrain/heightgrid.bin",
+    "width": 540,
+    "height": 540,
+    "dtype": "float32",
+    "endianness": "little",
+    "layout": "row-major",
+    "rowOrder": "north-to-south",
+    "pixelOrigin": "center",
+    "units": "meters",
+    "relativeToBaseElevation": true,
+    "cellSizeMeters": [
+      3.995896566893743,
+      3.9951081014174052
+    ]
+  },
+  "attribution": "Datenquelle: Bayerische Vermessungsverwaltung \u2013 www.geodaten.bayern.de, CC BY 4.0"
+}
