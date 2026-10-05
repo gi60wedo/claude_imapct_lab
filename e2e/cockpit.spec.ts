@@ -7,7 +7,7 @@ test('cockpit shows fixture scores, exports brief, applies mitigation', async ({
   const brief = fx('brief.json');
   const requests: string[] = [];
   page.on('request', (r) => { if (/\/data\/fixtures\/result-/.test(r.url())) requests.push(r.url()); });
-  await page.goto('/');
+  await page.goto('/?data=fixtures');
 
   const cockpit = page.getByTestId('cockpit');
   await expect(cockpit).toBeVisible();

@@ -9,7 +9,13 @@
     "build": "tsc -b && vite build",
     "test": "vitest",
     "e2e": "playwright test",
-    "typecheck": "tsc -b --noEmit"
+    "typecheck": "tsc -b --noEmit",
+    "sim:dev-data": "tsx src/sim/dev/buildDevData.ts",
+    "sim:report": "tsx src/sim/dev/report.ts",
+    "sim:export-world": "tsx src/sim/dev/exportWorld.ts",
+    "prep": "uv run --project prep python prep/build_all.py && npm run rank:bake",
+    "rank:bake": "node src/rank/bake.ts",
+    "video": "node video/record.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.131.0",
@@ -37,6 +43,10 @@
     "tsx": "4.23.15",
     "typescript": "7.0.2",
     "vite": "8.3.2",
-    "vitest": "5.0.3"
+    "vitest": "5.0.3",
+    "playwright": "^1.63.0"
+  },
+  "engines": {
+    "node": ">=22.18"
   }
 }

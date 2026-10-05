@@ -123,14 +123,14 @@ describe('verdicts, mitigation, delta', () => {
     const llm = fakeLlm({ propose_mitigation: () => ({ kind: 'KIOSKS', persona: 'commuter', count: 3, window: '', rationale: 'Shorter walk from the exit.' }) });
     const { mitigation, source } = await proposeMitigation(req(), 'KAUFHOF', { llm });
     expect(source).toBe('claude');
-    expect(mitigation.id).toBe('KIOSKS:3');
+    expect(mitigation.id).toBe('Express kiosk (3) near the transit exit');
   });
 
   it('rejects malformed proposals and uses the deterministic one', async () => {
     const llm = fakeLlm({ propose_mitigation: () => ({ kind: 'DELIVERY_WINDOW', persona: 'vendor', count: 0, window: 'early', rationale: 'x' }) });
     const { source, mitigation } = await proposeMitigation(req(), 'LORENZKIRCHE', { llm });
     expect(source).toBe('template');
-    expect(mitigation.id).toMatch(/^(KIOSKS:\d|DELIVERY_WINDOW:\d\d:\d\d-\d\d:\d\d|STALL_LAYOUT:\d)$/);
+    expect(mitigation.id).toMatch(/^(Express kiosk|Delivery window \d\d:\d\d-\d\d:\d\d|Stall layout)/);
   });
 
   it('computes a delta between sunny and rainy runs and explains it offline', async () => {

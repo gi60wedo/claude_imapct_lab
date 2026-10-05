@@ -1,5 +1,6 @@
 import type { Candidate, PersonaId, Scenario, SimulationResult, Weights } from '../src/contracts';
-import { PERSONA_IDS, WEIGHT_KEYS, normalizeWeights, rankSites } from '../src/score/score';
+import { PERSONA_GUARD_THRESHOLD, PERSONA_IDS, WEIGHT_KEYS, normalizeWeights, rankSites } from '../src/score/score';
+import { extractNumbers } from './numberCheck';
 
 /** What the client posts to /api/brief. Mirrors `BriefInput` in src/ui/adapters/types.ts. */
 export interface BriefRequest {
@@ -66,11 +67,12 @@ export function buildPayload(req: BriefRequest): BriefPayload {
 
 /** Every numeric fact in the payload, plus pairwise gaps a writer may legitimately quote ("12 points ahead"). */
 export function allowedNumbers(p: BriefPayload, extra: number[] = []): number[] {
-  const out: number[] = [...extra, p.ranking.length, p.rejected.length, ...Object.values(p.weightsPct)];
+  const out: number[] = [...extra, PERSONA_GUARD_THRESHOLD, p.ranking.length, p.rejected.length, ...Object.values(p.weightsPct)];
   for (const s of p.ranking) {
-    out.push(s.rank, s.marketScore, s.consensus, ...Object.values(s.criteria));
-    for (const x of Object.values(s.personas)) out.push(x.score, x.served, x.droppedOut);
+    out.push(s.rank, s.marketScore, s.consensus, ...Object.values(s.criteria), ...s.mitigations.flatMap(extractNumbers), ...extractNumbers(s.name));
+    for (const x of Object.values(s.personas)) out.push(x.score, x.served, x.droppedOut, ...extractNumbers(x.topFriction));
   }
+  for (const r of p.rejected) out.push(...extractNumbers(r.name), ...extractNumbers(r.reason));
   for (let i = 0; i < p.ranking.length; i++) {
     for (let j = i + 1; j < p.ranking.length; j++) {
       const a = p.ranking[i], b = p.ranking[j];

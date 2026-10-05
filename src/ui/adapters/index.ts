@@ -1,10 +1,14 @@
 import { fixtureBrief, fixtureSim } from './fixtures';
 import { httpBrief } from './http';
 import type { BriefClient, SimClient } from './types';
+import { workerSim } from './worker';
 
-/** `?brief=live` talks to the Part D server (`npm run server`); the default keeps the fixture path used by e2e. */
-export const LIVE_BRIEF = typeof location !== 'undefined' && new URLSearchParams(location.search).get('brief') === 'live';
+const params = typeof location !== 'undefined' ? new URLSearchParams(location.search) : new URLSearchParams();
+const useFixtures = params.get('data') === 'fixtures';
 
-/** Integration swaps the sim for the worker adapter. */
-export const sim: SimClient = fixtureSim;
+/** `?brief=live` talks to the Part D server (`npm run server`); the default keeps the fixture brief used by e2e. */
+export const LIVE_BRIEF = params.get('brief') === 'live';
+
+/** Live engine in a Web Worker by default; `?data=fixtures` keeps the fixture path. */
+export const sim: SimClient = useFixtures || typeof Worker === 'undefined' ? fixtureSim : workerSim();
 export const briefClient: BriefClient = LIVE_BRIEF ? httpBrief : fixtureBrief;

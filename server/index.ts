@@ -42,7 +42,10 @@ createServer(async (req, res) => {
   const handler = routes[url];
   if (!handler || req.method !== 'POST') return send(res, 404, { error: 'not found' });
   try {
-    send(res, 200, await handler(await readJson(req)));
+    const t0 = Date.now();
+    const out = await handler(await readJson(req)) as { source?: string; warning?: string };
+    console.log(`[brief] ${url} ${Date.now() - t0} ms source=${out.source ?? '-'}${out.warning ? ` warning=${out.warning}` : ''}`);
+    send(res, 200, out);
   } catch (e) {
     send(res, 400, { error: e instanceof Error ? e.message : String(e) });
   }

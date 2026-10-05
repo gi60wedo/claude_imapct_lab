@@ -27,4 +27,9 @@ export const useOrthoTiles = () => useJson(() => getJson<OrthoTile[]>('/base/dop
 export const useBollards = () => useJson(() => getJson<LngLat[]>('/base/bollards.json'));
 /** LoD2 buildings from the prep pipeline; OSM footprints when /data/buildings.json is absent. */
 export const useBuildings = () =>
-  useJson(async () => (await getJson<Building[]>('/data/buildings.json')) ?? getJson<Building[]>('/base/buildings-osm.json'));
+  useJson(async () => {
+    // Part A writes { source, fields, buildings }; the C1 fallback is a bare array.
+    const lod2 = await getJson<Building[] | { buildings: Building[] }>('/data/buildings.json');
+    if (lod2) return Array.isArray(lod2) ? lod2 : lod2.buildings;
+    return getJson<Building[]>('/base/buildings-osm.json');
+  });

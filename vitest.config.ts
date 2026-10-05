@@ -4,7 +4,11 @@ import react from '@vitejs/plugin-react';
 export default defineConfig({
   plugins: [react()],
   test: {
-    environment: 'jsdom',
-    include: ['src/**/*.test.{ts,tsx}', 'server/**/*.test.ts'],
+    projects: [
+      // UI components need a DOM.
+      { extends: true, test: { name: 'ui', environment: 'jsdom', include: ['src/ui/**/*.test.{ts,tsx}'] } },
+      // Data, simulation, scoring and server code run in Node (they read files via import.meta.url).
+      { extends: true, test: { name: 'node', environment: 'node', include: ['src/{rank,sim,score}/**/*.test.ts', 'server/**/*.test.ts'] } },
+    ],
   },
 });

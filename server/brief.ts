@@ -62,7 +62,7 @@ export interface Mitigation {
   /** DELIVERY_WINDOW: "HH:MM-HH:MM". Otherwise "". */
   window: string;
   rationale: string;
-  /** Compact id passed to the engine as a `mitigations[]` entry, e.g. "KIOSKS:3". */
+  /** Engine-readable label, e.g. "Express kiosk (3) near the transit exit". */
   id: string;
 }
 
@@ -127,13 +127,15 @@ async function askVerified<T>(
   parse: (raw: unknown) => T, textOf: (v: T) => string, effort: 'low' | 'medium' = 'low',
 ): Promise<T> {
   let feedback = '';
+  let invented: number[] = [];
   for (let attempt = 0; attempt < 2; attempt++) {
     const value = parse(await llm.callTool({ system: SYSTEM, user: user + feedback, tool, effort }));
-    const invented = findInventedNumbers(textOf(value), allowed);
+    invented = findInventedNumbers(textOf(value), allowed);
     if (invented.length === 0) return value;
+    console.warn(`[brief] ${tool.name} attempt ${attempt + 1} used numbers not in the input: ${invented.join(', ')}`);
     feedback = `\n\nYour previous answer used numbers that are not in the input: ${invented.join(', ')}. Rewrite using only numbers from the input.`;
   }
-  throw new Error('model kept inventing numbers');
+  throw new Error(`model kept inventing numbers: ${invented.join(', ')}`);
 }
 
 // ───────────────────────── offline / deterministic fallbacks ─────────────────────────
@@ -250,8 +252,11 @@ export async function generateVerdicts(
   return Object.fromEntries(entries) as Record<PersonaId, { verdict: string; source: 'claude' | 'template' }>;
 }
 
+/** Text handed to the engine as a `mitigations[]` entry. The UI's toMitigation() maps it by keyword (kiosk / delivery window / layout). */
 export const mitigationId = (m: Pick<Mitigation, 'kind' | 'count' | 'window'>) =>
-  m.kind === 'DELIVERY_WINDOW' ? `DELIVERY_WINDOW:${m.window}` : `${m.kind}:${m.count}`;
+  m.kind === 'DELIVERY_WINDOW' ? `Delivery window ${m.window}: removable bollards lowered`
+  : m.kind === 'KIOSKS' ? `Express kiosk (${m.count}) near the transit exit`
+  : `Stall layout: loop with one circulation route (${m.count} slots)`;
 
 /** Deterministic mitigation for the worst persona, used when Claude is unreachable. */
 export function templateMitigation(s: SitePayload): Mitigation {

@@ -19,7 +19,7 @@ test('live brief: Claude brief, persona verdicts, mitigation loop, what-if delta
   // propose → simulate → judge
   await page.getByRole('button', { name: 'Apply Claude mitigation' }).click();
   await expect(page.getByTestId('mitigation-note')).toBeVisible({ timeout: 60_000 });
-  await expect(page.getByTestId('applied')).toContainText(/KIOSKS|DELIVERY_WINDOW|STALL_LAYOUT/);
+  await expect(page.getByTestId('applied')).toContainText(/kiosk|delivery window|layout/i);
 
   // what-if → "what changed and why"
   await page.getByRole('button', { name: 'Rainy' }).click();

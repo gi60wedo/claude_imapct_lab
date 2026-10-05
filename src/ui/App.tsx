@@ -5,12 +5,12 @@ import RankingPanel from './ranking/RankingPanel';
 import WhatIfBar from './whatif/WhatIfBar';
 import { LIVE_BRIEF, briefClient, sim } from './adapters';
 import { startLive } from './live/live';
-import { getState, resultKey, setState } from './state/store';
+import { getState, pickShortlist, resultKey, setState } from './state/store';
 
 async function boot() {
   setState({ loading: true });
   const candidates = await sim.candidates();
-  const shortlist = candidates.filter((c) => c.passedFilter);
+  const shortlist = pickShortlist(candidates);
   const { scenario } = getState();
   const results = await Promise.allSettled(shortlist.map((c) => sim.run(c.id, scenario, [], 42)));
   const map: Record<string, import('../contracts').SimulationResult> = {};

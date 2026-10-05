@@ -16,3 +16,10 @@ dist/
 test-results/
 playwright-report/
 e2e/__shots__/
+
+# Part A prep / video
+prep/.venv/
+prep/cache/
+__pycache__/
+video/.tmp/
+video/.smoke.*
