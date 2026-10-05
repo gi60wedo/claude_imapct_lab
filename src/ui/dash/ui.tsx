@@ -65,7 +65,7 @@ export function Delta({ k, value, digits = 0, unit = '', higherIsBetter = true, 
   return (
     <span className={`whitespace-nowrap text-sm ${tone}`} data-testid="delta">
       <B k={k}>{`${rounded > 0 ? '+' : rounded < 0 ? '−' : '±'}${Math.abs(rounded).toFixed(digits)}${unit}`}</B>
-      {vs && <span className="text-zinc-500"> vs {vs}</span>}
+      {vs && <span className="text-zinc-500"> vs <B k="rival.candidate.name" mono={false}>{vs}</B></span>}
     </span>
   );
 }
