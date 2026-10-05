@@ -1,0 +1,11 @@
+# Temporary files
+~$*
+*.tmp
+*.docx
+*.doc
+
+# Dependencies
+node_modules/
+dist/
+.DS_Store
+*.log
