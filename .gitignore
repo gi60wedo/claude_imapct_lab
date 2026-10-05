@@ -1,6 +1,8 @@
 # Temporary files
 ~$*
 *.tmp
+*.docx
+*.doc
 
 # Dependencies
 node_modules/
