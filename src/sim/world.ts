@@ -50,7 +50,9 @@ export interface World {
   pois: Pois;
   population: PopulationCell[];
   stations: StationArrivals[];
-  /** Existing unloading locations by candidate ID; supplements tagged graph nodes. */
+  /** Existing unloading locations by candidate ID, supplementing tagged graph nodes.
+   * An entry requires designated unloading; an absent entry allows one nearby vehicle-node fallback.
+   */
   loadingPoints?: Record<string, LngLat[]>;
   /** Area the Christkindlesmarkt occupies (Hauptmarkt), blocked in CHRISTMAS_MARKET. */
   christmasMarket: LngLat[];

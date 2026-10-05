@@ -1,8 +1,14 @@
 // @vitest-environment node
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { LocalProjection, distanceToPolygon } from '../geo';
 
-const fixture = vi.hoisted(() => ({ osm: '' }));
+const fixture = vi.hoisted(() => ({ osm: '', rejectSpokes: false }));
+vi.mock('../geo', async (importOriginal) => {
+  const geo = await importOriginal<typeof import('../geo')>();
+  return { ...geo, segmentWithinPolygon: (...args: Parameters<typeof geo.segmentWithinPolygon>) =>
+    !fixture.rejectSpokes && geo.segmentWithinPolygon(...args) };
+});
+afterEach(() => { fixture.rejectSpokes = false; });
 vi.mock('node:fs', async (importOriginal) => ({
   ...await importOriginal<typeof import('node:fs')>(),
   readFileSync: (file: string) => {
@@ -15,6 +21,21 @@ vi.mock('node:fs', async (importOriginal) => ({
 import { buildOsmWorld } from '../dev/osmWorld';
 
 describe('walkable OSM areas', () => {
+  it('keeps the perimeter without creating an orphan when every spoke is rejected', () => {
+    fixture.rejectSpokes = true;
+    const proj = new LocalProjection(11.07, 49.45);
+    const ring: [number, number][] = [[0, 0], [120, 0], [120, 30], [30, 30], [30, 120], [0, 120]];
+    fixture.osm = JSON.stringify({ elements: [{ type: 'way', id: 1, nodes: [1, 2, 3, 4, 5, 6, 1],
+      geometry: [...ring, ring[0]].map(([x, y]) => {
+        const [lon, lat] = proj.toLngLat(x, y);
+        return { lon, lat };
+      }), tags: { highway: 'pedestrian', area: 'yes' } }] });
+    const { graph } = buildOsmWorld();
+    const connected = new Set(graph.edges.flatMap((e) => [e.a, e.b]));
+    expect(graph.nodes.every((_, i) => connected.has(i))).toBe(true);
+    expect(graph.nodes).toHaveLength(6);
+    expect(graph.edges).toHaveLength(6);
+  });
   it('keeps every generated connection inside a concave L-shaped polygon', () => {
     const proj = new LocalProjection(11.07, 49.45);
     const ring: [number, number][] = [[0, 0], [120, 0], [120, 30], [30, 30], [30, 120], [0, 120]];

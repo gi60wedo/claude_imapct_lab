@@ -2,7 +2,7 @@
 // src/sim/dev/data/stations.dev.json. A's prep/ owns the real arrivals.json; this unblocks B until then.
 // Usage: npm run sim:dev-data   (needs `unzip` on PATH)
 import { spawn } from 'node:child_process';
-import { writeFileSync, mkdirSync, mkdtempSync, renameSync, rmSync } from 'node:fs';
+import { writeFileSync, mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
@@ -119,8 +119,10 @@ export async function buildDevData(destination = STATIONS_PATH) {
     const mode = tripMode.get(r.trip_id);
     const parent = mode && stopToParent.get(r.stop_id);
     if (!parent || !parents.has(parent)) return;
-    if (!/^\d{2,}:[0-5]\d:[0-5]\d$/.test(r.arrival_time)) throw new Error(`Invalid GTFS arrival ${r.arrival_time}`);
-    const [h, m, s] = r.arrival_time.split(':').map(Number);
+    const arrivalTime = r.arrival_time.trim();
+    if (!arrivalTime) return; // GTFS permits untimed intermediate stops.
+    if (!/^\d{1,}:[0-5]\d:[0-5]\d$/.test(arrivalTime)) throw new Error(`Invalid GTFS arrival ${r.arrival_time}`);
+    const [h, m, s] = arrivalTime.split(':').map(Number);
     const t = h * 3600 + m * 60 + s;
     if (t < WINDOW[0] || t > WINDOW[1]) return;
     const key = `${parent}|${mode}`;
@@ -151,6 +153,10 @@ export async function buildDevData(destination = STATIONS_PATH) {
   console.log(`→ ${destination} (Saturday ${SATURDAY})`);
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+export function isMainModule(entryPath: string | undefined, moduleUrl = import.meta.url): boolean {
+  return Boolean(entryPath && realpathSync(resolve(entryPath)) === realpathSync(fileURLToPath(moduleUrl)));
+}
+
+if (isMainModule(process.argv[1])) {
   buildDevData().catch((e) => { console.error(e); process.exitCode = 1; });
 }

@@ -31,9 +31,11 @@ const result = twin.run(candidate, { scenario: 'RAINY_SAT', seed: 42, mitigation
 - `slope` comes only from OSM `incline` tags. Replace it with DGM1 slope per edge.
 - The Kaufhof polygon in `dev/benchmarks.ts` is approximate. Replace it with the LoD2 outline.
 
-Vans unload at tagged graph nodes with `loadingPoint: true`, supplemented by existing locations in
-`World.loadingPoints[candidateId]`. Coordinates snap to vehicle-legal nodes within 60 m and require
-a carry of at most 80 m. The dev importer recognizes OSM node tags `loading=yes/designated`,
+Candidates with an entry in `World.loadingPoints` use only tagged graph nodes with `loadingPoint: true`
+and their listed locations. An empty entry still requires designated unloading. Candidates without
+an entry use a single nearest vehicle-legal node within 80 m of the stalls as their baseline loading
+point. Listed coordinates snap to vehicle-legal nodes within 60 m and require a carry of at most 80 m.
+The dev importer recognizes OSM node tags `loading=yes/designated`,
 `amenity=loading_dock`, `parking=loading`, and `parking_space=loading`. `dev/benchmarks.ts` supplies
 Hauptmarkt's existing Waaggasse market access and Kaufhof's rear Peuntgasse dock access. Lorenzkirche
 has no loading fixture and its closest road approach requires a 94 m carry. A loading-point mitigation
@@ -42,6 +44,7 @@ engine uses the same random stream across mitigations to make routing comparison
 
 Commuter pool times represent departures from the station entrance after train arrival and exit time.
 Other visitors' pool times represent preferred market arrivals. Kiosk visits use their full service time.
+Non-kiosk visits retain their stall pauses plus the final `dwellSec / 5` pause.
 The GTFS extractor validates subprocess completion and station arrivals before it atomically replaces
 the dev arrivals file. Real-data integration checks the OSM file, arrivals file, and both Zensus inputs
 before loading the world in `beforeAll`.

@@ -145,9 +145,10 @@ export function buildOsmWorld(): World {
       const centre = centres.find(([x, y]) => distanceToPolygon(x, y, poly) < 1e-7);
       if (!centre) continue; // The perimeter still permits safe travel on a degenerate area.
       const [cLng, cLat] = proj.toLngLat(...centre);
-      const c = nodeIndex(virtualId--, cLat, cLng);
+      let c = -1;
       for (let k = 0; k < ring.length; k++) {
         if (!segmentWithinPolygon(poly[k], centre, poly)) continue;
+        if (c < 0) c = nodeIndex(virtualId--, cLat, cLng);
         const i = ring[k];
         edges.push({ a: i, b: c, lengthM: haversineM(nodes[i].lng, nodes[i].lat, cLng, cLat), ...base, vehicle: false, oneway: false, widthM: 6 });
       }

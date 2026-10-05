@@ -1,21 +1,22 @@
 // @vitest-environment node
 import { EventEmitter } from 'node:events';
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { Readable } from 'node:stream';
+import { pathToFileURL } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const subprocess = vi.hoisted(() => ({ spawn: vi.fn() }));
 vi.mock('node:child_process', () => ({ spawn: subprocess.spawn }));
-import { buildDevData } from '../dev/buildDevData';
+import { buildDevData, isMainModule } from '../dev/buildDevData';
 
 const roots: string[] = [];
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
   vi.restoreAllMocks();
 });
-function extraction(mode: 'failed' | 'empty' | 'malformed' | 'valid' | 'spawn-error' | 'quoted') {
+function extraction(mode: 'failed' | 'empty' | 'malformed' | 'valid' | 'spawn-error' | 'quoted' | 'single-hour' | 'blank') {
   const root = mkdtempSync(resolve(tmpdir(), 'sim-gtfs-'));
   roots.push(root);
   mkdirSync(resolve(root, 'data'));
@@ -29,7 +30,9 @@ function extraction(mode: 'failed' | 'empty' | 'malformed' | 'valid' | 'spawn-er
     'calendar.txt': 'service_id,saturday,start_date,end_date\nservice,1,20260101,20261231\n',
     'calendar_dates.txt': 'service_id,date,exception_type\n',
     'trips.txt': 'route_id,service_id,trip_id\nr,service,t\n',
-    'stop_times.txt': 'trip_id,stop_id,arrival_time\n' + (mode === 'empty' ? '' : `t,s,${mode === 'malformed' ? 'invalid' : '11:30:00'}\n`),
+    'stop_times.txt': 'trip_id,stop_id,arrival_time\n' + (mode === 'empty' ? '' : mode === 'single-hour'
+      ? 't,s,5:30:00\n' : mode === 'blank' ? 't,s,\nt,s,11:30:00\n'
+        : `t,s,${mode === 'malformed' ? 'invalid' : '11:30:00'}\n`),
   };
   subprocess.spawn.mockImplementation((_command: string, args: string[]) => {
     const file = args.at(-1)!;
@@ -50,6 +53,14 @@ function extraction(mode: 'failed' | 'empty' | 'malformed' | 'valid' | 'spawn-er
 }
 
 describe('GTFS extraction replacement', () => {
+  it('recognizes a main-module path through a symlinked checkout', () => {
+    const r = extraction('valid');
+    symlinkSync(resolve(r.root, 'data'), resolve(r.root, 'linked-data'), 'dir');
+    const link = resolve(r.root, 'linked-data/stations.dev.json');
+    expect(isMainModule(link, pathToFileURL(r.destination).href)).toBe(true);
+    expect(isMainModule(r.destination, pathToFileURL(link).href)).toBe(true);
+    expect(isMainModule(undefined, pathToFileURL(r.destination).href)).toBe(false);
+  });
   it.each(['failed', 'empty', 'malformed', 'spawn-error'] as const)('preserves valid arrivals when extraction is %s', async (mode) => {
     const r = extraction(mode);
     await expect(buildDevData(r.destination)).rejects.toThrow();
@@ -68,5 +79,10 @@ describe('GTFS extraction replacement', () => {
     const r = extraction('quoted');
     await buildDevData(r.destination);
     expect(JSON.parse(readFileSync(r.destination, 'utf8'))[0].name).toBe('Test, "Exit"');
+  });
+  it.each([['single-hour', 19800], ['blank', 41400]] as const)('accepts %s GTFS arrival values', async (mode, expected) => {
+    const r = extraction(mode);
+    await buildDevData(r.destination);
+    expect(JSON.parse(readFileSync(r.destination, 'utf8'))[0].arrivals).toEqual([expected]);
   });
 });

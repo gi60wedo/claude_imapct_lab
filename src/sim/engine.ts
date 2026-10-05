@@ -95,18 +95,15 @@ export function simulate(pw: PreparedWorld, cand: Candidate, opts: SimOptions): 
     appendShifted(trip, out, depart);
     const end = leg.nodes[leg.nodes.length - 1];
     let t = trip.ts[trip.ts.length - 1];
-    let remainingDwell = dwellSec;
     if (!atKiosk && siteAvailable) {
       const visited = chooseStalls(r, slots, g.x[end], g.y[end], layout, 4);
       for (const s of visited) {
         slotVisits[s] += up;
-        const pause = dwellSec / (visited.length + 1);
-        t += pause;
-        remainingDwell -= pause;
+        t += dwellSec / (visited.length + 1);
         pushPoint(trip, slots[s][0], slots[s][1], t, -1);
       }
     }
-    t += remainingDwell;
+    t += atKiosk ? dwellSec : dwellSec / 5;
     pushPoint(trip, g.x[end], g.y[end], t, -1);
     const back = walkTrip(pw, ctx, [...leg.nodes].reverse(), [...leg.edges].reverse(), 0, senior);
     appendShifted(trip, back, t);
@@ -392,8 +389,13 @@ function simulateVans(pw: PreparedWorld, ctx: CostContext, mitigations: Mitigati
   const bottlenecks: Bottleneck[] = [];
   const distPoly = (i: number) => distanceToPolygon(g.x[i], g.y[i], poly);
 
-  const loading = g.nodesWithin(cx, cy, reach + P.VENDOR_MAX_CARRY_M,
-    (i) => nodes[i].loadingPoint === true && pw.isVanNode(i) && distPoly(i) <= P.VENDOR_MAX_CARRY_M);
+  // A loadingPoints entry restricts unloading to designated points; without one, the single
+  // vehicle-legal node nearest the stalls serves as the baseline loading point.
+  const designatedOnly = Object.hasOwn(pw.world.loadingPoints ?? {}, candidateId);
+  const nearby = g.nodesWithin(cx, cy, reach + P.VENDOR_MAX_CARRY_M,
+    (i) => (!designatedOnly || nodes[i].loadingPoint === true) && pw.isVanNode(i) && distPoly(i) <= P.VENDOR_MAX_CARRY_M);
+  const loading = designatedOnly || nearby.length === 0 ? nearby
+    : [nearby.reduce((b, i) => (distPoly(i) < distPoly(b) ? i : b))];
   const addLoadingPoint = (lng: number, lat: number) => {
     const [x, y] = pw.proj.toXY(lng, lat);
     const i = g.nearest(x, y, 60, pw.isVanNode);
@@ -410,7 +412,8 @@ function simulateVans(pw: PreparedWorld, ctx: CostContext, mitigations: Mitigati
 
   if (loading.length === 0) {
     const nearest = g.nearest(cx, cy, 1000, pw.isVanNode);
-    const d = nearest >= 0 ? Math.round(distPoly(nearest)) : NaN;
+    if (nearest < 0) return fail('no vehicle-legal road within 1000 m of the site');
+    const d = Math.round(distPoly(nearest));
     if (d > P.VENDOR_MAX_CARRY_M) {
       return fail(`nearest vehicle-legal road is ${d} m from the stalls (limit ${P.VENDOR_MAX_CARRY_M} m)`);
     }

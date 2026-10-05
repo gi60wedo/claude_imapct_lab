@@ -4,7 +4,7 @@ import { simulate } from '../engine';
 import { LocalProjection } from '../geo';
 import { round1 } from '../metrics';
 import * as P from '../params';
-import { prepareWorld, type PoolAgent } from '../prepare';
+import { prepareWorld, scenarioPool, type PoolAgent } from '../prepare';
 import { fork } from '../rng';
 import type { GraphEdge, GraphNode, Mitigation, World } from '../world';
 
@@ -41,11 +41,11 @@ describe('review regressions', () => {
       [edge(0, 1, 130, true), edge(1, 2, 30, true), edge(2, 3, 40, true)]);
     w.pois.vanEntries = [xy(-200)];
     const run = (input: World) => simulate(prepared(input), site, opts).personas.vendor;
-    const tagged = run(w);
+    const tagged = run({ ...w, loadingPoints: { [site.id]: [] } });
     const explicit = run({ ...w, loadingPoints: { [site.id]: [xy(-40)], another: [xy(0)] } });
     expect(explicit.score).toBeGreaterThan(tagged.score);
     expect(explicit.topFriction).toMatch(/^25 m carry/);
-    expect(run({ ...w, loadingPoints: { another: [xy(0)] } })).toEqual(tagged);
+    expect(run({ ...w, loadingPoints: { another: [xy(0)] } }).score).toBeGreaterThan(explicit.score);
     expect(run({ ...w, loadingPoints: { [site.id]: [xy(-200)] } })).toEqual(tagged);
     const both = run({ ...w, loadingPoints: { [site.id]: [xy(-40)] }, graph: {
       ...w.graph, nodes: w.graph.nodes.map((n, i) => i === 3 ? { ...n, loadingPoint: true } : n),
@@ -58,6 +58,7 @@ describe('review regressions', () => {
     const w = world([node(-200), { ...node(-70), loadingPoint: true }, node(0)],
       [edge(0, 1, 130, true), edge(1, 2, 70, true)]);
     w.pois.vanEntries = [xy(-200)];
+    w.loadingPoints = { [site.id]: [] };
     const pw = prepared(w);
     const run = (mitigations: Mitigation[] = []) => simulate(pw, site, { ...opts, mitigations });
     const base = run();
@@ -72,6 +73,53 @@ describe('review regressions', () => {
       expect(unchanged.trips.filter((t) => t.persona === 'vendor')).toEqual(base.trips.filter((t) => t.persona === 'vendor'));
     }
     expect(run([{ kind: 'loading_point', lng: xy(0)[0], lat: xy(0)[1] }])).toEqual(added);
+  });
+
+  it('falls back to one nearby vehicle node without tags, while an empty benchmark entry disables fallback', () => {
+    const w = world([node(-200), node(-40), node(0)], [edge(0, 1, 160, true), edge(1, 2, 40, true)]);
+    w.pois.vanEntries = [xy(-200)];
+    const run = (input: World) => simulate(prepared(input), site, opts).personas.vendor;
+    expect(run(w).score).toBeGreaterThan(90);
+    expect(run(w).topFriction).toMatch(/^0 m carry/);
+    expect(run({ ...w, loadingPoints: { another: [] } })).toEqual(run(w));
+    expect(run({ ...w, loadingPoints: { [site.id]: [] } }).score).toBe(5);
+  });
+
+  it('picks the fallback node nearest the stalls rather than the site centre', () => {
+    // (0, 52) is 52 m from the centre and 37 m from the stalls; (40, 40) is 57 m and 35 m.
+    const w = world([node(-200), node(0, 52), node(40, 40)],
+      [edge(0, 1, 210, true), edge(0, 2, 245, true)]);
+    w.pois.vanEntries = [xy(-200)];
+    const vendor = simulate(prepared(w), site, opts).personas.vendor;
+    expect(vendor.topFriction).toMatch(/^35 m carry/);
+  });
+
+  it('adds a genuinely new fallback destination around a blocked route with the seed fixed', () => {
+    const w = world([node(-200), { ...node(-100), barrier: 'gate' }, node(0), node(-40)],
+      [edge(0, 1, 100, true), edge(1, 2, 100, true), edge(0, 3, 160, true)]);
+    w.pois.vanEntries = [xy(-200)];
+    const pw = prepared(w);
+    const base = simulate(pw, site, opts);
+    expect(base.personas.vendor.score).toBe(5);
+    expect(base.personas.vendor.topFriction).toMatch(/^gate/);
+    const added = simulate(pw, site, { ...opts, mitigations: [
+      { kind: 'loading_point', lng: xy(-40)[0], lat: xy(-40)[1] },
+    ] });
+    expect(added.personas.vendor.score).toBeGreaterThan(base.personas.vendor.score + 30);
+    expect(added.personas.vendor.topFriction).toMatch(/^25 m carry/);
+    expect(simulate(pw, site, { ...opts, mitigations: [
+      { kind: 'loading_point', lng: xy(0)[0], lat: xy(0)[1], label: 'Existing fallback' },
+    ] }).personas.vendor).toEqual(base.personas.vendor);
+  });
+
+  it('reports a missing nearby vehicle road without a NaN distance', () => {
+    const w = world([node(0), node(50), node(1400), node(1450)], [edge(0, 1, 50), edge(2, 3, 50, true)]);
+    w.pois.vanEntries = [xy(1400)];
+    w.loadingPoints = { [site.id]: [] };
+    const vendor = simulate(prepared(w), site, opts).personas.vendor;
+    expect(vendor.score).toBe(5);
+    expect(vendor.topFriction).toMatch(/no vehicle-legal road within 1000 m/);
+    expect(vendor.topFriction).not.toContain('NaN');
   });
 
   it('counts senior accessibility using the selected 180 m or 240 m stop route', () => {
@@ -95,6 +143,34 @@ describe('review regressions', () => {
     const trip = r.trips.find((t) => t.persona === 'commuter')!;
     expect(trip.path[0][2]).toBe(depart);
     expect(trip.path[1][2]).toBe(depart + 6 * 60);
+  });
+
+  it('carries real train arrival and exit times from the generated pool into commuter trips', () => {
+    const w = world([node(0), node(468)], [edge(0, 1, 468)]);
+    w.pois.subwayEntrances = [{ ...w.graph.nodes[1], station: 'Test' }];
+    const arrivals = [11.5 * 3600, 12 * 3600];
+    w.stations = [{ ...w.graph.nodes[1], name: 'Test', mode: 'subway', arrivals }];
+    const pw = prepareWorld(w);
+    const pool = scenarioPool(pw, opts.scenario, opts.seed, opts.scale);
+    const commuters = pool.agents.filter((a) => a.kind === 'commuter');
+    const departures = arrivals.map((t) => t + P.COMMUTER_EXIT_MIN * 60);
+    expect(commuters).toHaveLength(arrivals.length * P.LUNCH_SHOPPERS_PER_TRAIN);
+    expect([...new Set(commuters.map((a) => a.arriveAt))]).toEqual(departures);
+    const trips = simulate(pw, site, opts).trips.filter((t) => t.persona === 'commuter');
+    expect(trips).toHaveLength(commuters.length);
+    expect([...new Set(trips.map((t) => t.path[0][2]))].sort((a, b) => a - b)).toEqual(departures);
+    for (const trip of trips) expect(trip.path[1][2] - trip.path[0][2]).toBe(6 * 60);
+  });
+
+  it('preserves the original non-kiosk dwell for a one-stall visit', () => {
+    const w = world([node(0), node(468)], [edge(0, 1, 468)]);
+    w.pois.subwayEntrances = [{ ...w.graph.nodes[1], station: 'Test' }];
+    const smallSite = { ...site, areaM2: 250,
+      polygon: [xy(-0.5, -0.5), xy(0.5, -0.5), xy(0.5, 0.5), xy(-0.5, 0.5)] };
+    const r = simulate(prepared(w, [agent('commuter', 1, 41400)]), smallSite, opts);
+    expect(r.stallExposure).toHaveLength(1);
+    const trip = r.trips.find((t) => t.persona === 'commuter')!;
+    expect(trip.path[3][2] - trip.path[1][2]).toBe(Math.round(P.COMMUTER_SHOP_MIN * 60 * 0.7));
   });
 
   it('keeps a kiosk visitor at the kiosk for the full configured service time', () => {
