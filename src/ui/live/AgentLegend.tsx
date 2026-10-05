@@ -23,16 +23,16 @@ export function AgentLegend({ result, view, timeSec, colors, onColors }: {
         <Accent>Agents</Accent>
         <button type="button" data-testid="agent-colors" aria-pressed={colors === 'persona'}
           onClick={() => onColors(colors === 'persona' ? 'white' : 'persona')}
-          className="rounded-md border border-white/20 px-2 py-px text-[11px] font-semibold text-zinc-200 hover:border-white/50">
+          className="rounded-md border border-white/20 px-2 py-px text-sm font-semibold text-zinc-200 hover:border-white/50">
           Agents: {colors === 'persona' ? 'Colour' : 'White'}
         </button>
       </div>
-      <ul className="flex flex-col gap-0.5 text-[11px]" data-testid="live-counters">
+      <ul className="flex flex-col gap-0.5 text-sm" data-testid="live-counters">
         {PERSONAS.map((p) => (
           <li key={p.id} className="flex items-center gap-1.5" data-testid={`live-${p.id}`}>
             <span className="inline-block h-2 w-2 shrink-0 rounded-full"
               style={{ background: colors === 'persona' ? PERSONA_COLORS[p.id] : AGENT_WHITE }} />
-            <span className={`w-16 shrink-0 font-semibold ${p.text}`}>{p.label}</span>
+            <span className={`w-24 shrink-0 font-semibold ${p.text}`}>{p.label}</span>
             {sampled.has(p.id) ? (
               <span className="truncate text-zinc-400">
                 en route <B k={`liveCounts(result.trips, timeSec).enRoute.${p.id}`} className="text-zinc-100">{enRoute[p.id]}</B>
@@ -43,7 +43,7 @@ export function AgentLegend({ result, view, timeSec, colors, onColors }: {
         ))}
       </ul>
       {view && view.trips.length > 0 && (
-        <div className="mt-1 text-[10px] leading-snug text-zinc-500">
+        <div className="mt-1 text-sm leading-snug text-zinc-500">
           One dot per agent on its way · <B k="view.trips.length">{view.trips.length}</B> trips in the run
         </div>
       )}

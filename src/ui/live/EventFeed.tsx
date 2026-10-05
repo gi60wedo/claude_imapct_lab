@@ -20,12 +20,12 @@ export function EventFeed({ result, timeSec }: { result: SimulationResult | null
     <Card className="p-2" testId="event-feed">
       <Accent className="mb-1">Live events</Accent>
       {shown.length === 0 ? (
-        <div className="text-[11px] text-zinc-500" data-testid="event-empty">No engine events before this time yet.</div>
+        <div className="text-sm text-zinc-500" data-testid="event-empty">No engine events before this time yet.</div>
       ) : (
         <ol className="flex flex-col gap-0.5">
           {shown.map((e) => (
             <li key={e.id} data-testid="event" data-kind={e.kind} title={e.bottleneck.cause}
-              className={`truncate border-l-2 pl-1.5 text-[11px] ${TONE[e.kind]}`}>
+              className={`truncate border-l-2 pl-1.5 text-sm ${TONE[e.kind]}`}>
               <B k="bottleneck.time">{e.bottleneck.time}</B>{' '}
               <span className="font-semibold">{EVENT_LABEL[e.kind]}</span>
               {e.kind !== 'van_blocked' && <> · <B k="bottleneck.severity">{Math.round(e.bottleneck.severity * 100)}</B>%</>}

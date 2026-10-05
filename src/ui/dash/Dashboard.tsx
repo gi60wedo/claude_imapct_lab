@@ -12,8 +12,10 @@ import { setState, useStore } from '../state/store';
 import CityThree, { type AgentColors, type CameraMode, type Quality } from '../three/CityThree';
 import { bootDashboard } from './boot';
 import { CameraSwitch, CandidateList, ProfileCard, TopBar } from './left';
+import { rivalOf } from './citizens';
 import { rankCandidates, resultsFor } from './model';
-import { Constraints, PersonaCards, ScoreCard, StallGrid } from './right';
+import { CitizenChoice, PersonaCards, ScoreCard, StallGrid } from './right';
+import { useStreetStats } from './streetStats';
 import { Card, CollapseButton, Label } from './ui';
 
 const NO_MITIGATIONS: string[] = [];
@@ -32,7 +34,7 @@ function SidePanel({ children }: { children: ReactNode }) {
   const [open, setOpen] = useState(true);
   return (
     <aside data-slot="side" data-testid="side-panel" data-open={open}
-      className={`pointer-events-auto flex min-h-0 shrink-0 flex-col gap-2 ${open ? 'w-[340px]' : 'w-9'}`}>
+      className={`pointer-events-auto flex min-h-0 shrink-0 flex-col gap-2 ${open ? 'w-[420px]' : 'w-11'}`}>
       {open ? (
         <div className="flex justify-end">
           <Card className="p-0.5"><CollapseButton open onToggle={() => setOpen(false)} testId="side-collapse" label="site details" direction="right" /></Card>
@@ -78,13 +80,20 @@ export default function Dashboard() {
   const live = useLiveSim({ candidateId: selectedId, scenario, mitigations: result?.mitigations ?? NO_MITIGATIONS, seed: result?.seed ?? 42 });
   const fallback = useMemo(() => result && onClock(result), [result]);
   const cityResult = live.view ?? fallback;
+  // The walking numbers use the live run's trips once it matches the selection.
+  const tripSource = live.result && live.result.candidateId === selectedId && live.result.scenario === scenario ? live.result : result;
+
+  const rival = useMemo(() => rivalOf(ranked, selectedId), [ranked, selectedId]);
+  const streetStats = useStreetStats(candidate);
+  const rivalStreets = useStreetStats(rival?.candidate);
+  const rivalInfo = rival ? { name: rival.candidate.name, streets: rivalStreets } : null;
 
   const select = (id: string) => setState({ selectedId: id });
   const pickSlice = (s: TimeSlice) => setState({ slice: s });
 
   return (
     <div className="relative h-screen w-screen overflow-hidden bg-[#0b0b0c] text-zinc-100">
-      <div className="absolute inset-0" data-testid="dashboard">
+      <div className="absolute inset-0" data-testid="dashboard" data-weather={scenario} data-live-weather={live.result?.scenario ?? ''}>
         <main className="absolute inset-0" data-slot="city">
           <ViewBoundary>
             <CityThree cameraMode={cameraMode} heatmap={heatmap} selectedId={selectedId}
@@ -93,10 +102,10 @@ export default function Dashboard() {
           </ViewBoundary>
         </main>
         {/* The overlay passes pointer events through to the city except on the panels. */}
-        <div className="pointer-events-none absolute inset-0 flex flex-col gap-2 p-2 pb-5">
-          <TopBar result={result} scenario={scenario} slice={slice} />
+        <div className="pointer-events-none absolute inset-0 flex flex-col gap-2 p-2 pb-7">
+          <TopBar result={result} scenario={scenario} slice={slice} streets={streetStats} rival={rivalInfo} />
           <div className="flex min-h-0 flex-1 gap-2">
-            <div className="flex min-h-0 w-[272px] shrink-0 flex-col gap-2">
+            <div className="flex min-h-0 w-[300px] shrink-0 flex-col gap-2">
               <CandidateList ranked={ranked} selectedId={selectedId} brief={brief} scenario={scenario} onSelect={select} />
               <div className="min-h-0 flex-1" />
               <div className="pointer-events-auto">
@@ -110,14 +119,15 @@ export default function Dashboard() {
                   quality={quality} onQuality={() => setQuality((q) => (q === 'high' ? 'fast' : 'high'))}
                   streets={streets} onStreets={() => setStreets((s) => !s)} />
               </div>
-              {loading && <Card className="pointer-events-auto px-3 py-1 text-xs text-cyan-300">Running the engine…</Card>}
+              {loading && <Card className="pointer-events-auto px-3 py-1 text-sm text-cyan-300">Running the engine…</Card>}
             </div>
             <SidePanel>
-              <ScoreCard score={current?.score ?? null} rank={current?.rank ?? null} of={ranked.length} candidate={candidate} brief={brief} />
-              <ProfileCard candidate={candidate} result={result} />
+              <ScoreCard score={current?.score ?? null} rank={current?.rank ?? null} of={ranked.length} candidate={candidate} brief={brief} rival={rival} />
+              <ProfileCard candidate={candidate} result={result} streets={streetStats} rival={rivalInfo} />
               {result && result.stallExposure.length > 0 && <StallGrid key={result.candidateId} result={result} />}
-              <PersonaCards result={result} />
-              <Constraints result={result} brief={brief} candidate={candidate} slice={slice} />
+              <PersonaCards result={result} rival={rival} />
+              <CitizenChoice result={result} tripSource={tripSource} ranked={ranked} selectedId={selectedId} candidate={candidate}
+                streets={streetStats} brief={brief} scenario={scenario} slice={slice} />
             </SidePanel>
           </div>
           <div className="pointer-events-auto">
@@ -125,7 +135,7 @@ export default function Dashboard() {
           </div>
         </div>
       </div>
-      <footer className="pointer-events-none absolute inset-x-0 bottom-0 truncate px-3 pb-0.5 text-[10px] text-zinc-500" data-testid="attribution">
+      <footer className="pointer-events-none absolute inset-x-0 bottom-0 truncate px-3 pb-1 text-sm text-zinc-400" data-testid="attribution">
         Datenquelle: Bayerische Vermessungsverwaltung – www.geodaten.bayern.de, CC BY 4.0 · © OpenStreetMap contributors · Destatis, Zensus 2022, dl-de/by-2-0 · VGN
       </footer>
     </div>

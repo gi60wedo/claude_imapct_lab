@@ -8,9 +8,9 @@ import { formatClockSec, sliceStart, SPEEDS } from './clock';
 import { SCENARIOS, switchScenario } from './scenario';
 import type { LiveSim } from './useLiveSim';
 
-const btn = 'rounded-md border px-2 py-0.5 text-xs font-semibold transition';
-const on = 'border-white/40 bg-white/10 text-white';
-const off = 'border-transparent text-zinc-400 hover:text-white';
+const btn = 'rounded-xl border px-2.5 py-0.5 text-sm font-semibold transition';
+const on = 'border-cyan-300/50 bg-cyan-300/10 text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.1)]';
+const off = 'border-transparent text-zinc-300 hover:text-white';
 
 function Divider() {
   return <span className="h-5 w-px bg-white/10" aria-hidden="true" />;
@@ -33,7 +33,7 @@ function ScenarioSwitch({ scenario, disabled }: { scenario: Scenario; disabled: 
           {busy === s.id ? '…' : s.label}
         </button>
       ))}
-      {error && <span role="alert" className="text-xs text-vendor">{error}</span>}
+      {error && <span role="alert" className="text-sm text-vendor">{error}</span>}
     </div>
   );
 }
@@ -51,7 +51,7 @@ export function LiveBar({ live, slice, scenario, ready, onSlice }: {
         </div>
         <button type="button" data-testid="play" aria-pressed={live.playing} aria-label={live.playing ? 'Pause trips' : 'Play trips'}
           onClick={live.toggle}
-          className="rounded-md border border-cyan-400/50 bg-cyan-400/10 px-2.5 py-0.5 text-xs font-semibold text-cyan-300 hover:bg-cyan-400/20">
+          className="rounded-md border border-cyan-400/50 bg-cyan-400/10 px-2.5 py-0.5 text-sm font-semibold text-cyan-300 hover:bg-cyan-400/20">
           {live.playing ? '❚❚ Pause' : '▶ Play'}
         </button>
         <div className="flex items-center gap-0.5" role="group" aria-label="Speed">
@@ -87,7 +87,7 @@ export function LiveBar({ live, slice, scenario, ready, onSlice }: {
         </div>
         <Divider />
         <ScenarioSwitch scenario={scenario} disabled={!ready} />
-        <div className="ml-auto text-right text-[11px] text-zinc-400">
+        <div className="ml-auto text-right text-sm text-zinc-400">
           {live.running ? <span data-testid="live-running">Re-running engine…</span>
             : live.error ? <span role="alert" className="text-vendor">{live.error}</span>
             : <><B k="result.trips.length">{r?.trips.length}</B> sampled agents · <B k="result.stallExposure.length">{r?.stallExposure.length}</B> stalls live</>}

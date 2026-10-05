@@ -20,10 +20,28 @@ const unboundDigits = (page: Page) => page.evaluate(() => {
 const personaNumbers = (page: Page) =>
   page.locator('[data-testid^=persona-card-] [data-bind^="result.personas."]').allTextContents();
 
-test('three dashboard: camera modes, heatmap, candidate switch, rule zero', async ({ page }) => {
+const PERSONA_IDS = ['senior', 'vendor', 'commuter', 'retailer'] as const;
+
+/** One citizen card per persona, each naming its binding constraint and the site it chooses. */
+async function expectCitizenCards(page: Page) {
+  await expect(page.locator('[data-testid^=citizen-card-]')).toHaveCount(PERSONA_IDS.length);
+  for (const id of PERSONA_IDS) {
+    const card = page.getByTestId(`citizen-card-${id}`);
+    await expect(card.locator(`[data-bind="result.personas.${id}.topFriction"]`)).not.toHaveText('—');
+    await expect(card.getByTestId('citizen-choice-score')).not.toHaveText('—');
+  }
+}
+
+/** Collects page errors and console errors for the final assertion. */
+function watchErrors(page: Page) {
   const errors: string[] = [];
   page.on('pageerror', (e) => errors.push(e.message));
   page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
+  return errors;
+}
+
+test('three dashboard (fixtures smoke): camera modes, heatmap, candidate switch, rule zero', async ({ page }) => {
+  const errors = watchErrors(page);
 
   await page.setViewportSize({ width: 1600, height: 900 });
   await page.goto('/?view=three&data=fixtures');
@@ -35,6 +53,7 @@ test('three dashboard: camera modes, heatmap, candidate switch, rule zero', asyn
   await expect(page.getByTestId('time-bar')).toBeInViewport();
   // A persona without a verdict shows no verdict line at all, not a bare dash.
   await expect(page.locator('[data-testid^=persona-card-] [data-bind$=".verdict"]', { hasText: /^—$/ })).toHaveCount(0);
+  await expectCitizenCards(page);
   await page.screenshot({ path: `${SHOTS}/three-initial.png` });
 
   for (const mode of ['side', 'top', 'perspective'] as const) {
@@ -124,6 +143,7 @@ test('three dashboard: camera modes, heatmap, candidate switch, rule zero', asyn
   await expect(bar).toHaveAttribute('data-live-scenario', 'RAINY_SAT');
   await expect.poll(async () => Number(await bar.getAttribute('data-runs'))).toBeGreaterThan(runs);
   await expect(bar).toHaveAttribute('data-blend', '1');
+  await expect(page.getByTestId('dashboard')).toHaveAttribute('data-weather', 'RAINY_SAT');
   await page.screenshot({ path: `${SHOTS}/three-rainy.png` });
 
   // The site details collapse to a slim rail and come back.
@@ -138,4 +158,71 @@ test('three dashboard: camera modes, heatmap, candidate switch, rule zero', asyn
 
   expect(await unboundDigits(page), 'every digit on screen must sit inside [data-bind]').toEqual([]);
   expect(errors, 'no console errors').toEqual([]);
+});
+
+// The live engine (web worker, no fixtures): thousands of trips for the selected site, so boot and
+// every scenario switch take longer than with fixtures.
+const LIVE_READY_MS = 180_000;
+
+async function openLive(page: Page) {
+  await page.setViewportSize({ width: 1600, height: 900 });
+  await page.goto('/?view=three');
+  await expect(page.locator('[data-testid=city-three][data-ready=true]')).toBeVisible({ timeout: LIVE_READY_MS });
+  await expect(page.locator('[data-testid=persona-card-senior] [data-bind="result.personas.senior.score"]'))
+    .toHaveText(/\d/, { timeout: LIVE_READY_MS });
+  const bar = page.getByTestId('live-bar');
+  await expect.poll(async () => Number(await bar.getAttribute('data-runs')), { timeout: LIVE_READY_MS }).toBeGreaterThan(0);
+  return { city: page.getByTestId('city-three'), bar };
+}
+
+test('three dashboard on the live engine: agents, citizen choice, street stats, weather, rule zero', async ({ page }) => {
+  test.setTimeout(600_000);
+  const errors = watchErrors(page);
+  const { city, bar } = await openLive(page);
+
+  // Agents: one dot per trip on its way at the peak slice.
+  await page.getByTestId('slice-11:30_PEAK').click();
+  await expect.poll(async () => Number(await city.getAttribute('data-agent-count')), { timeout: 60_000 })
+    .toBeGreaterThanOrEqual(50);
+
+  await expectCitizenCards(page);
+  // Street slope and surface come from graph.json around the selected site.
+  await expect(page.locator('[data-testid=kpi-slope] [data-bind="streetStats.meanSlope"]')).toHaveText(/^\d+\.\d$/, { timeout: 60_000 });
+  await expect(page.locator('[data-testid=profile-slope] [data-bind="streetStats.p90Slope"]')).toHaveText(/^\d+\.\d$/);
+  await expect(page.getByTestId('surface-bar').locator('[data-share]')).toHaveCount(4);
+  await page.screenshot({ path: `${SHOTS}/three-live.png` });
+  expect(await unboundDigits(page), 'every digit on screen must sit inside [data-bind]').toEqual([]);
+
+  // Weather: the scenario switch re-runs the shortlist and the live run on the engine.
+  const dashboard = page.getByTestId('dashboard');
+  for (const scenario of ['RAINY_SAT', 'CHRISTMAS_MARKET'] as const) {
+    const runs = Number(await bar.getAttribute('data-runs'));
+    await page.getByTestId(`scenario-${scenario}`).click();
+    await expect(page.getByTestId(`scenario-${scenario}`)).toHaveAttribute('aria-pressed', 'true', { timeout: LIVE_READY_MS });
+    await expect(dashboard).toHaveAttribute('data-weather', scenario);
+    await expect(bar).toHaveAttribute('data-live-scenario', scenario, { timeout: LIVE_READY_MS });
+    await expect.poll(async () => Number(await bar.getAttribute('data-runs'))).toBeGreaterThan(runs);
+    // The city mirrors the weather once the 3D view exposes it.
+    if (await city.getAttribute('data-weather') !== null) await expect(city).toHaveAttribute('data-weather', scenario);
+    await expectCitizenCards(page);
+    await page.screenshot({ path: `${SHOTS}/three-live-${scenario.toLowerCase()}.png` });
+    expect(await unboundDigits(page), `every digit bound after ${scenario}`).toEqual([]);
+  }
+
+  expect(errors, 'no console errors').toEqual([]);
+});
+
+test('three dashboard on the live engine: the heatmap toggle draws heat cells', async ({ page }) => {
+  test.setTimeout(300_000);
+  const { city } = await openLive(page);
+  test.skip(await city.getAttribute('data-heat-cells') === null,
+    'CityThree does not expose data-heat-cells yet; the 3D view adds it. Re-run once it lands.');
+
+  const heat = page.getByTestId('heatmap-toggle');
+  if (await heat.getAttribute('aria-pressed') === 'true') await heat.click();
+  await expect(heat).toHaveAttribute('aria-pressed', 'false');
+  await heat.click();
+  await expect(heat).toHaveAttribute('aria-pressed', 'true');
+  await expect.poll(async () => Number(await city.getAttribute('data-heat-cells')), { timeout: 60_000 }).toBeGreaterThan(0);
+  await page.screenshot({ path: `${SHOTS}/three-live-heatmap.png` });
 });
