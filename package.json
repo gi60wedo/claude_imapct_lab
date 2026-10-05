@@ -1,0 +1,21 @@
+{
+  "name": "urbantwin",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "prep": "uv run --project prep python prep/build_all.py && npm run rank:bake",
+    "rank:bake": "node src/rank/bake.ts",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "video": "node video/record.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.4",
+    "playwright": "^1.63.0",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.3"
+  }
+}
