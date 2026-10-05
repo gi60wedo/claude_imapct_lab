@@ -9,3 +9,9 @@ node_modules/
 dist/
 .DS_Store
 *.log
+
+# Local configuration and browser test artifacts
+.env*
+test-results/
+playwright-report/
+e2e/__shots__/

@@ -1,0 +1,27 @@
+{
+  "recommended": "KAUFHOF",
+  "why": [
+    "Excellent accessibility for seniors with elevators and level floors (95%)",
+    "Reliable delivery access with rear loading (92% vendor satisfaction)",
+    "Strong footfall from proximate retail areas"
+  ],
+  "comparisons": [
+    {
+      "site": "Lorenzkirche",
+      "betterAt": "commuter access from U-Bahn station",
+      "worseAt": "vendor delivery (bollards block vans at 05:30)"
+    },
+    {
+      "site": "Hauptmarkt",
+      "betterAt": "iconic location, highest foot traffic",
+      "worseAt": "conflicts with existing events (conflicts with recurring programs)"
+    }
+  ],
+  "losers": [
+    {
+      "persona": "commuter",
+      "mitigation": "add shuttle service from station during peak hours"
+    }
+  ],
+  "councilBriefMd": "# Market Relocation Brief\n\nKaufhof offers the best balance across all stakeholder groups."
+}
