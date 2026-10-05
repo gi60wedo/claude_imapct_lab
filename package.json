@@ -8,10 +8,13 @@
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "sim:dev-data": "tsx src/sim/dev/buildDevData.ts",
-    "sim:report": "tsx src/sim/dev/report.ts"
+    "sim:report": "tsx src/sim/dev/report.ts",
+    "sim:viz": "tsx src/sim/dev/viz.ts"
   },
   "devDependencies": {
+    "@anthropic-ai/sdk": "^0.131.0",
     "@types/node": "^26.6.4",
+    "deck.gl": "^9.4.0",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",
     "vitest": "^5.0.3"

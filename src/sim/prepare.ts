@@ -42,6 +42,8 @@ export interface PreparedWorld {
   stations: { name: string; x: number; y: number; mode: 'subway' | 'tram'; arrivals: number[] }[];
   christmasXY: [number, number][];
   christmasEdges: Uint8Array;
+  /** Current road conditions (World.roadConditions) baked into per-edge masks. */
+  road: { walkFactor: Float32Array; walkClosed: Uint8Array; vanClosed: Uint8Array; edgeCondition: Int16Array };
   pools: Map<string, ScenarioPool>;
 }
 
@@ -73,9 +75,30 @@ export function prepareWorld(world: World): PreparedWorld {
     return node >= 0 ? [{ node, station: s.station, x, y }] : [];
   });
 
+  // Road conditions: closures, narrowed or rough stretches, and elevators out of service
+  const nEdges = world.graph.edges.length;
+  const road = { walkFactor: new Float32Array(nEdges).fill(1), walkClosed: new Uint8Array(nEdges), vanClosed: new Uint8Array(nEdges),
+                 edgeCondition: new Int16Array(nEdges).fill(-1) };
+  const elevatorsOut: [number, number, number][] = [];
+  (world.roadConditions ?? []).forEach((c, ci) => {
+    const [cx, cy] = proj.toXY(c.lng, c.lat);
+    if (c.effect === 'elevator_out') { elevatorsOut.push([cx, cy, c.radiusM]); return; }
+    for (let k = 0; k < nEdges; k++) {
+      if (Math.hypot(edgeMidX[k] - cx, edgeMidY[k] - cy) > c.radiusM) continue;
+      road.edgeCondition[k] = ci;
+      if (c.effect === 'closed') {
+        if (c.affects.includes('walk')) road.walkClosed[k] = 1;
+        if (c.affects.includes('van')) road.vanClosed[k] = 1;
+      } else if (c.affects.includes('walk') || c.affects.includes('senior')) {
+        road.walkFactor[k] = Math.max(road.walkFactor[k], c.walkFactor ?? 1.3);
+      }
+    }
+  });
+  const elevatorWorks = (i: number) => !elevatorsOut.some(([x, y, r]) => Math.hypot(g.x[i] - x, g.y[i] - y) <= r);
+
   const seniorAccess = new Set<number>();
-  world.graph.nodes.forEach((n, i) => { if (n.elevator && isWalkNode(i)) seniorAccess.add(i); });
-  for (const p of world.pois.elevators) { const i = snap(p, isStepFreeNode, 40); if (i >= 0) seniorAccess.add(i); }
+  world.graph.nodes.forEach((n, i) => { if (n.elevator && isWalkNode(i) && elevatorWorks(i)) seniorAccess.add(i); });
+  for (const p of world.pois.elevators) { const i = snap(p, isStepFreeNode, 40); if (i >= 0 && elevatorWorks(i)) seniorAccess.add(i); }
   for (const s of world.pois.stops) { const i = snap([s.lng, s.lat], isStepFreeNode, 60); if (i >= 0) seniorAccess.add(i); }
 
   const vanEntries = [...new Set(world.pois.vanEntries.map((p) => snap(p, isVanNode, 200)).filter((i) => i >= 0))];
@@ -101,23 +124,22 @@ export function prepareWorld(world: World): PreparedWorld {
   }
 
   return { world, g, proj, isWalkNode, isVanNode, edgeMidX, edgeMidY, entrances, seniorAccess: [...seniorAccess],
-           vanEntries, shops, attractionNodes, stations, christmasXY, christmasEdges, pools: new Map() };
+           vanEntries, shops, attractionNodes, stations, christmasXY, christmasEdges, road, pools: new Map() };
 }
 
 /** Cost context for a scenario plus mitigations. */
 export function scenarioContext(pw: PreparedWorld, scenario: Scenario, mitigations: Mitigation[] = []): CostContext {
-  const ctx: CostContext = { rain: scenario === 'RAINY_SAT' };
+  // Current road conditions apply in every scenario; the Christkindlesmarkt adds to them.
+  const closed = pw.road.walkClosed.slice();
+  const factor = pw.road.walkFactor.slice();
   if (scenario === 'CHRISTMAS_MARKET') {
-    const closed = new Uint8Array(pw.christmasEdges.length);
-    const factor = new Float32Array(pw.christmasEdges.length).fill(1);
     pw.world.graph.edges.forEach((e, k) => {
       if (!pw.christmasEdges[k]) return;
       if (e.vehicle && !e.walk) closed[k] = 1;
-      factor[k] = P.CHRISTMAS_CROWD_FACTOR;
+      factor[k] *= P.CHRISTMAS_CROWD_FACTOR;
     });
-    ctx.closedEdges = closed;
-    ctx.walkFactor = factor;
   }
+  const ctx: CostContext = { rain: scenario === 'RAINY_SAT', snow: scenario === 'SNOWY_SAT', closedEdges: closed, walkFactor: factor, vanClosedEdges: pw.road.vanClosed };
   for (const m of mitigations) if (m.kind === 'delivery_window' && m.unlockRemovableBollards) ctx.unlockRemovableBollards = true;
   return ctx;
 }

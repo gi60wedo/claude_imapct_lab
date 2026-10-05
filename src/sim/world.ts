@@ -31,7 +31,7 @@ export interface SimGraph { nodes: GraphNode[]; edges: GraphEdge[] }
 export interface Pois {
   subwayEntrances: { lng: number; lat: number; station: string }[];
   elevators: LngLat[];
-  stops: { lng: number; lat: number; name: string; mode: 'tram' | 'bus' }[];
+  stops: { lng: number; lat: number; name: string; mode: 'tram' | 'bus' | 'sbahn' }[];
   shops: LngLat[];
   attractions: LngLat[];
   /** Where vans enter the inner city (ring-road junctions). */
@@ -43,6 +43,17 @@ export interface PopulationCell { lng: number; lat: number; pop: number; share65
 /** Saturday arrivals per rail station from GTFS, seconds after midnight. */
 export interface StationArrivals { name: string; lng: number; lat: number; mode: 'subway' | 'tram'; arrivals: number[] }
 
+/** A current roadworks or condition report (from the city / news), applied to edges within radiusM. */
+export interface RoadCondition {
+  id: string; title: string; street?: string;
+  lng: number; lat: number; radiusM: number;
+  affects: string[];                                   // 'walk' | 'van' | 'senior'
+  effect: 'closed' | 'narrowed' | 'rough_surface' | 'elevator_out';
+  walkFactor?: number;                                 // extra walking cost for narrowed / rough stretches
+  from?: string | null; until?: string | null;
+  source: string; sourceTitle?: string; confidence?: string;
+}
+
 export interface World {
   graph: SimGraph;
   pois: Pois;
@@ -50,6 +61,7 @@ export interface World {
   stations: StationArrivals[];
   /** Area the Christkindlesmarkt occupies (Hauptmarkt), blocked in CHRISTMAS_MARKET. */
   christmasMarket: LngLat[];
+  roadConditions?: RoadCondition[];
 }
 
 /** Interventions Claude's propose_mitigation tool can return; the engine re-simulates with them. */

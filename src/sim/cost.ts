@@ -5,8 +5,12 @@ export type Profile = 'walker' | 'senior' | 'van';
 
 export interface CostContext {
   rain: boolean;
+  /** Snow: unsheltered paths cost more, and cobbles, steps and slopes get slippery for seniors. */
+  snow?: boolean;
   /** Edges closed in this scenario (e.g. Christkindlesmarkt stalls). */
   closedEdges?: Uint8Array;
+  /** Edges closed to vans only (e.g. roadworks that leave the footway open). */
+  vanClosedEdges?: Uint8Array;
   /** Extra walking cost per edge, e.g. crowds in the Christkindlesmarkt. */
   walkFactor?: Float32Array;
   /** Delivery-window mitigation: removable bollards are lowered for vans. */
@@ -19,6 +23,8 @@ export const SENIOR_COBBLE = 2.5;
 export const OTHER_COBBLE = 1.1;
 export const SENIOR_ROUGH = 1.6;
 export const RAIN_FACTOR = 1.3;
+export const SNOW_FACTOR = 1.35;
+export const SENIOR_SNOW_SLIP = 1.6;   // cobbles and slopes in snow, on top of the usual senior factors
 export const SENIOR_SLOPE_THRESHOLD = 0.06;
 export const SENIOR_SLOPE_GAIN = 8;
 
@@ -36,15 +42,17 @@ export function slopeFactor(e: GraphEdge, profile: Profile): number {
 export function edgeCost(e: GraphEdge, edgeIndex: number, forward: boolean, profile: Profile, ctx: CostContext): number {
   if (ctx.closedEdges?.[edgeIndex]) return Infinity;
   if (profile === 'van') {
-    if (!e.vehicle) return Infinity;
+    if (!e.vehicle || ctx.vanClosedEdges?.[edgeIndex]) return Infinity;
     if (e.oneway && !forward) return Infinity;
     return e.lengthM;
   }
   if (!e.walk) return Infinity;
   if (profile === 'senior' && e.steps) return Infinity;   // steps are a hard block; elevator edges stay open
   const rain = ctx.rain && !e.sheltered ? RAIN_FACTOR : 1;
+  const snow = ctx.snow && !e.sheltered
+    ? SNOW_FACTOR * (profile === 'senior' && (e.surface !== 'smooth' || e.slope > 0.03) ? SENIOR_SNOW_SLIP : 1) : 1;
   const crowd = ctx.walkFactor ? ctx.walkFactor[edgeIndex] || 1 : 1;
-  return e.lengthM * surfaceFactor(e, profile) * slopeFactor(e, profile) * rain * crowd;
+  return e.lengthM * surfaceFactor(e, profile) * slopeFactor(e, profile) * rain * snow * crowd;
 }
 
 /** Whether a van may pass through this node. */

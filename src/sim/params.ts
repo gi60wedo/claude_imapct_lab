@@ -70,9 +70,29 @@ export const ELEVATOR_CAPACITY_5MIN = 15;      // rollator users one cabin moves
 
 // Criteria normalisation (D normalises across sites again in score.ts)
 export const FOOTFALL_REF = 6000;              // modeled exposure that maps to 63/100
-export const LOCAL_BUSINESS_REF = 120;         // induced passes per shop that map to 63/100
+export const LOCAL_BUSINESS_REF = 120;
+export const WALKABILITY_ROADWORKS = 60;       // walkability points lost if a whole route ran through roadworks         // induced passes per shop that map to 63/100
 
 // Scenarios
 export const RAIN_DEMAND_OUTDOOR = 0.75;       // residents and tourists who still come to an outdoor market in rain
 export const CHRISTMAS_TOURIST_FACTOR = 2;
-export const CHRISTMAS_CROWD_FACTOR = 1.8;     // walking cost through the Christkindlesmarkt
+export const CHRISTMAS_CROWD_FACTOR = 1.8;
+export const SNOW_DEMAND_OUTDOOR = 0.6;         // residents and tourists who still come to an outdoor market in snow
+export const SENIOR_SNOW_DROP = 0.4;            // extra senior drop-off for an outdoor market in snow
+export const SNOW_SPEED = 0.8;                  // walking speed on snowy, unsheltered paths
+export const RATING_SNOW_OPEN_SITE = 1.5;
+export const RATING_PER_100M_SNOW = 0.35;
+export const RATING_SNOW_ROUTE_MAX = 3;     // walking cost through the Christkindlesmarkt
+
+// Interview marks out of 10 (interview.ts): start at 10, subtract what the route costs this person
+export const RATING_YOUNG_PER_MIN = 0.3;
+export const YOUNG_WALK_MAX_M = 1200;       // farther than this, the young commuter takes the U-Bahn
+export const RATING_PER_100M_COBBLE_YOUNG = 0.3;
+export const RATING_PER_STEP_RUN = 0.2;
+export const RATING_PER_100M_COBBLE_SENIOR = 2.0;
+export const RATING_PER_100M_ROUGH_SENIOR = 1.2;
+export const RATING_PER_100M_DETOUR = 1.0;
+export const RATING_PER_ROADWORK = 1.5;
+export const RATING_RAIN_OPEN_SITE = 1.0;
+export const RATING_PER_100M_RAIN = 0.25;
+export const RATING_RAIN_ROUTE_MAX = 2.5;

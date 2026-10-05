@@ -1,0 +1,916 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>UrbanTwin · Lorenzkirche vs Kaufhof</title>
+<style>
+  .viz-root {
+    color-scheme: light;
+    --page: #f9f9f7; --surface-1: #fcfcfb; --text-primary: #0b0b0b; --text-secondary: #52514e; --muted: #898781;
+    --grid: #e1e0d9; --baseline: #c3c2b7; --border: rgba(11,11,11,0.10); --track: #f0efec;
+    --ground: #f3f2ee; --street: #dcdbd4; --road: #b9b8b0; --building: #e4e3dd;
+    --persona-commuter: #2a78d6; --persona-vendor: #eb6834; --persona-senior: #1baf7a; --persona-retailer: #4a3aa7;
+    --young: #2a78d6;
+    --bar: #2a78d6; --delta-good: #006300; --delta-bad: #d03b3b;
+    --warning: #fab219; --serious: #ec835a; --critical: #d03b3b;
+    --seq: #cde2fb,#b7d3f6,#9ec5f4,#86b6ef,#6da7ec,#5598e7,#3987e5,#2a78d6,#256abf,#1c5cab,#184f95,#104281,#0d366b;
+    --div-neg: #2a78d6; --div-mid: #f0efec; --div-pos: #e34948;
+    --shadow: 0 6px 24px rgba(0,0,0,.10);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) .viz-root {
+      color-scheme: dark;
+      --page: #0d0d0d; --surface-1: #1a1a19; --text-primary: #ffffff; --text-secondary: #c3c2b7; --muted: #898781;
+      --grid: #2c2c2a; --baseline: #383835; --border: rgba(255,255,255,0.10); --track: #2c2c2a;
+      --ground: #121211; --street: #2f2f2d; --road: #4a4a45; --building: #3a3a37;
+      --persona-commuter: #3987e5; --persona-vendor: #d95926; --persona-senior: #199e70; --persona-retailer: #9085e9;
+      --young: #3987e5;
+      --bar: #3987e5; --delta-good: #0ca30c; --delta-bad: #e66767;
+      --seq: #0d366b,#104281,#184f95,#1c5cab,#256abf,#2a78d6,#3987e5,#5598e7,#6da7ec,#86b6ef,#9ec5f4,#b7d3f6,#cde2fb;
+      --div-neg: #3987e5; --div-mid: #383835; --div-pos: #e66767;
+      --shadow: 0 6px 24px rgba(0,0,0,.45);
+    }
+  }
+  :root[data-theme="dark"] .viz-root {
+    color-scheme: dark;
+    --page: #0d0d0d; --surface-1: #1a1a19; --text-primary: #ffffff; --text-secondary: #c3c2b7; --muted: #898781;
+    --grid: #2c2c2a; --baseline: #383835; --border: rgba(255,255,255,0.10); --track: #2c2c2a;
+    --ground: #121211; --street: #2f2f2d; --road: #4a4a45; --building: #3a3a37;
+    --persona-commuter: #3987e5; --persona-vendor: #d95926; --persona-senior: #199e70; --persona-retailer: #9085e9;
+    --young: #3987e5;
+    --bar: #3987e5; --delta-good: #0ca30c; --delta-bad: #e66767;
+    --seq: #0d366b,#104281,#184f95,#1c5cab,#256abf,#2a78d6,#3987e5,#5598e7,#6da7ec,#86b6ef,#9ec5f4,#b7d3f6,#cde2fb;
+    --div-neg: #3987e5; --div-mid: #383835; --div-pos: #e66767;
+    --shadow: 0 6px 24px rgba(0,0,0,.45);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body { font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  .viz-root { background: var(--page); color: var(--text-primary); height: 100vh; display: grid; grid-template-rows: auto auto 1fr; }
+  button { font: inherit; color: inherit; }
+  a { color: inherit; }
+
+  header { padding: 12px 18px 8px; display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+  header h1 { font-size: 17px; margin: 0; font-weight: 650; letter-spacing: -.01em; }
+  header .sub { color: var(--text-secondary); font-size: 13px; }
+  header .spacer { flex: 1; }
+  .pill-btn { border: 0; background: var(--text-primary); color: var(--surface-1); border-radius: 999px; padding: 7px 14px; cursor: pointer; font-weight: 600; font-size: 13px; }
+  .filters { display: flex; flex-wrap: wrap; gap: 10px 20px; padding: 0 18px 10px; align-items: center; }
+  .group { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .group > span { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .05em; }
+  .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; background: var(--surface-1); }
+  .seg button { border: 0; background: transparent; color: var(--text-secondary); padding: 6px 11px; font-size: 13px; cursor: pointer; }
+  .seg button + button { border-left: 1px solid var(--border); }
+  .seg button:hover { background: var(--track); }
+  .seg button[aria-pressed="true"] { background: var(--text-primary); color: var(--surface-1); }
+  .chip { border: 1px solid var(--border); background: var(--surface-1); color: var(--text-secondary); border-radius: 999px; padding: 4px 10px; font-size: 12px; cursor: pointer; }
+  .chip[aria-pressed="true"] { background: var(--text-primary); color: var(--surface-1); border-color: transparent; }
+
+  main { display: grid; grid-template-columns: minmax(0, 1fr) 420px; gap: 14px; padding: 0 18px 18px; min-height: 0; }
+  .stage { display: grid; grid-template-rows: 1fr auto; gap: 10px; min-height: 0; }
+  .maps { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; min-height: 0; }
+  .card { background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px; }
+  .map { position: relative; overflow: hidden; background: var(--ground); min-height: 380px; }
+  .map .deck { position: absolute; inset: 0; }
+  .map canvas.weather { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 1; }
+  .map .float { z-index: 2; }
+  .rate .from { grid-column: 1 / 4; color: var(--muted); font-size: 11px; margin: -2px 0 3px; }
+  .person.speaking { box-shadow: 0 0 0 3px var(--track), inset 0 0 0 1px var(--text-primary); }
+  .float { position: absolute; background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow); }
+  .sitebar { left: 10px; top: 10px; right: 10px; padding: 8px 12px; display: grid; grid-template-columns: 1fr auto; gap: 2px 10px; align-items: center; }
+  .sitebar .name { font-weight: 650; font-size: 15px; }
+  .sitebar .score { font-size: 22px; font-weight: 650; font-variant-numeric: tabular-nums; text-align: right; line-height: 1; }
+  .sitebar .score small { font-size: 11px; font-weight: 400; color: var(--muted); display: block; }
+  .sitebar .ps { grid-column: 1 / 3; display: flex; gap: 10px; flex-wrap: wrap; font-size: 12px; color: var(--text-secondary); }
+  .sitebar .ps span { display: inline-flex; align-items: center; gap: 4px; font-variant-numeric: tabular-nums; }
+  .sitebar .ps b { color: var(--text-primary); font-weight: 600; }
+  .sitebar .win { font-size: 11px; font-weight: 600; border: 1px solid var(--text-primary); border-radius: 999px; padding: 1px 7px; margin-left: 6px; vertical-align: middle; }
+  .legend { left: 10px; bottom: 10px; padding: 8px 10px; font-size: 11px; color: var(--text-secondary); max-width: 300px; }
+  .legend .title { color: var(--text-primary); font-weight: 600; margin-bottom: 2px; font-size: 12px; }
+  .ramp { height: 8px; border-radius: 3px; margin: 5px 0 2px; }
+  .ramp-labels { display: flex; justify-content: space-between; font-variant-numeric: tabular-nums; }
+  .keys { display: flex; flex-wrap: wrap; gap: 4px 10px; margin-top: 5px; }
+  .key { display: inline-flex; align-items: center; gap: 4px; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; flex: none; }
+  .ring { width: 12px; height: 12px; border-radius: 50%; border: 3px solid; display: inline-block; flex: none; }
+  .sq { width: 11px; height: 11px; border-radius: 2px; border: 3px solid; display: inline-block; flex: none; }
+  .caption { left: 50%; bottom: 64px; transform: translateX(-50%); padding: 12px 16px; max-width: 560px; text-align: center; display: none; z-index: 3; }
+  .caption b { display: block; font-size: 15px; margin-bottom: 2px; }
+  .caption span { color: var(--text-secondary); font-size: 13px; }
+  .caption .steps { margin-top: 8px; display: flex; gap: 4px; justify-content: center; }
+  .caption .steps i { width: 18px; height: 3px; border-radius: 2px; background: var(--track); }
+  .caption .steps i.on { background: var(--text-primary); }
+  .timeline { padding: 8px 14px; display: grid; grid-template-columns: auto 1fr auto auto; gap: 14px; align-items: center; position: relative; }
+  .timeline .play { width: 34px; height: 34px; border-radius: 50%; border: 0; background: var(--text-primary); color: var(--surface-1); cursor: pointer; font-size: 13px; }
+  .timeline .clock { font-size: 22px; font-weight: 650; font-variant-numeric: tabular-nums; min-width: 72px; text-align: right; }
+  .timeline .credit { font-size: 10px; color: var(--muted); max-width: 170px; line-height: 1.25; }
+  .tl-track { position: relative; height: 34px; }
+  .tl-track input { position: absolute; inset: 8px 0 auto 0; width: 100%; margin: 0; accent-color: var(--text-primary); }
+  .tl-slices { position: absolute; left: 0; right: 0; bottom: 0; height: 12px; font-size: 10px; color: var(--muted); }
+  .tl-slices span { position: absolute; transform: translateX(-50%); white-space: nowrap; }
+  .tl-band { position: absolute; top: 4px; height: 4px; background: var(--track); border-radius: 2px; }
+
+  aside { display: flex; flex-direction: column; gap: 12px; overflow: auto; min-height: 0; padding-right: 2px; }
+  aside .card { padding: 14px 16px; }
+  h2 { font-size: 13px; margin: 0 0 10px; font-weight: 650; display: flex; align-items: baseline; gap: 6px; }
+  h2 small { font-weight: 400; color: var(--muted); }
+  .note { font-size: 12px; color: var(--text-secondary); }
+  .hint { font-size: 11px; color: var(--muted); margin-top: 8px; }
+
+  .reco { border: 1.5px solid var(--text-primary); }
+  .reco .top { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+  .reco .badge { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 650; }
+  .reco .meta { font-size: 11px; color: var(--muted); margin-left: auto; text-align: right; }
+  .reco .headline { font-size: 17px; font-weight: 650; line-height: 1.3; margin: 0 0 10px; letter-spacing: -.01em; }
+  .reco ul { margin: 0 0 10px; padding-left: 18px; font-size: 13px; }
+  .reco li { margin-bottom: 3px; }
+  .reco .line { font-size: 13px; color: var(--text-secondary); margin: 0 0 8px; display: flex; gap: 8px; }
+  .reco .line b { color: var(--text-primary); font-weight: 600; flex: none; }
+  .bestfor { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 12px; font-size: 12px; color: var(--text-secondary); margin: 4px 0 10px;
+             padding: 8px 10px; background: var(--track); border-radius: 8px; }
+  .bestfor span { display: flex; align-items: center; gap: 6px; }
+  .bestfor strong { color: var(--text-primary); font-weight: 600; }
+  .actions { display: flex; gap: 6px; flex-wrap: wrap; }
+  .btn { border: 1px solid var(--border); background: var(--surface-1); border-radius: 999px; padding: 5px 12px; font-size: 12px; cursor: pointer; }
+  .btn.primary { background: var(--text-primary); color: var(--surface-1); border-color: transparent; }
+  .btn:disabled { opacity: .5; cursor: default; }
+  .warn { font-size: 12px; margin-top: 8px; display: flex; gap: 6px; }
+
+  .people { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 10px; }
+  .person { border: 1px solid var(--border); border-radius: 10px; padding: 10px; cursor: pointer; }
+  .person.on { border-color: var(--text-primary); box-shadow: inset 0 0 0 1px var(--text-primary); }
+  .person .who { display: flex; gap: 8px; align-items: center; }
+  .avatar { width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; color: #fff; font-weight: 700; font-size: 13px; flex: none; }
+  .person .nm { font-weight: 650; font-size: 13px; line-height: 1.2; }
+  .person .ab { font-size: 11px; color: var(--muted); line-height: 1.25; }
+  .rate { display: grid; grid-template-columns: 76px 1fr 38px; gap: 3px 6px; align-items: center; font-size: 11px; margin-top: 8px; color: var(--text-secondary); }
+  .rate .v { text-align: right; font-weight: 650; color: var(--text-primary); font-variant-numeric: tabular-nums; }
+  .rate .t { height: 6px; background: var(--track); border-radius: 3px; position: relative; }
+  .rate .t i { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 0 3px 3px 0; }
+  .transcript { display: flex; flex-direction: column; gap: 8px; font-size: 13px; }
+  .qa { border-radius: 8px; padding: 6px 8px; transition: background .2s; }
+  .qa.speaking { background: var(--track); }
+  .qa .q { font-size: 12px; color: var(--muted); }
+  .qa .a { color: var(--text-primary); }
+  .qa .a .spk { font-weight: 650; }
+
+  .h2h { display: grid; grid-template-columns: 38px 1fr 104px 1fr 38px; gap: 5px 6px; align-items: center; font-size: 12px; }
+  .h2h .hd { color: var(--muted); font-size: 11px; text-align: center; }
+  .h2h .hd.l { text-align: left; } .h2h .hd.r { text-align: right; }
+  .h2h .lab { text-align: center; color: var(--text-secondary); display: flex; align-items: center; justify-content: center; gap: 5px; }
+  .h2h .num { font-variant-numeric: tabular-nums; font-weight: 600; }
+  .h2h .num.l { text-align: left; } .h2h .num.r { text-align: right; }
+  .h2h .bar { height: 10px; position: relative; }
+  .h2h .bar i { position: absolute; top: 0; bottom: 0; background: var(--bar); }
+  .h2h .bar.left i { right: 0; border-radius: 4px 0 0 4px; } .h2h .bar.right i { left: 0; border-radius: 0 4px 4px 0; }
+  .h2h .sep { grid-column: 1 / 6; border-top: 1px solid var(--grid); margin: 3px 0; }
+  .h2h .lead { font-weight: 700; color: var(--text-primary); }
+
+  .presets { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 10px; }
+  .sliders { display: grid; grid-template-columns: 100px 1fr 34px; gap: 2px 8px; align-items: center; font-size: 12px; color: var(--text-secondary); }
+  .sliders input { width: 100%; accent-color: var(--text-primary); }
+  .sliders .w { text-align: right; font-variant-numeric: tabular-nums; color: var(--text-primary); }
+  .robust { font-size: 12px; color: var(--text-secondary); margin-top: 8px; }
+  .deltas { display: grid; grid-template-columns: 1fr auto auto auto auto; gap: 4px 10px; font-size: 12px; font-variant-numeric: tabular-nums; align-items: center; }
+  .deltas .h { color: var(--muted); font-size: 11px; }
+  .deltas .l { color: var(--text-secondary); }
+  .rw { display: grid; grid-template-columns: 16px 1fr; gap: 1px 8px; font-size: 12px; padding: 6px 0; border-bottom: 1px solid var(--grid); align-items: start; cursor: pointer; }
+  .rw:hover { background: var(--track); }
+  .rw .d { grid-column: 2; color: var(--muted); }
+  .bn { display: grid; grid-template-columns: 16px 1fr auto; gap: 1px 8px; font-size: 12px; padding: 5px 0; border-bottom: 1px solid var(--grid); align-items: center; cursor: pointer; }
+  .bn:hover { background: var(--track); }
+  .bn .sev { font-variant-numeric: tabular-nums; color: var(--text-secondary); }
+  .bn .cause { grid-column: 2 / 4; color: var(--muted); }
+  @media (max-width: 1200px) { .viz-root { height: auto; } main { grid-template-columns: 1fr; } .maps { height: 70vh; } }
+</style>
+</head>
+<body>
+<div class="viz-root">
+  <header>
+    <h1>UrbanTwin · Lorenzkirche vs Kaufhof</h1>
+    <span class="sub" id="sub"></span>
+    <span class="spacer"></span>
+    <button class="pill-btn" id="tour">▶ Guided tour</button>
+    <div class="seg" id="theme"><button data-v="auto">Auto</button><button data-v="light">Light</button><button data-v="dark">Dark</button></div>
+  </header>
+  <div class="filters">
+    <div class="group"><span>Weather</span><div class="seg" id="f-scenario"></div></div>
+    <div class="group"><span>Fix</span><div class="seg" id="f-mit"></div></div>
+    <div class="group"><span>Show</span><div id="layers" class="group"></div></div>
+  </div>
+  <main>
+    <section class="stage">
+      <div class="maps" id="maps"></div>
+      <div class="card timeline">
+        <button class="play" id="play" aria-label="Play or pause">❚❚</button>
+        <div class="tl-track" id="tl">
+          <input type="range" id="time" min="19800" max="54000" step="30" aria-label="Time of day">
+          <div class="tl-slices" id="tl-slices"></div>
+        </div>
+        <div class="clock" id="clock">11:30</div>
+        <div class="credit">© OpenStreetMap contributors · LDBV LoD2 CC BY 4.0 · Zensus 2022 · VGN · Stadt Nürnberg roadworks list</div>
+        <div class="float caption" id="caption"></div>
+      </div>
+    </section>
+    <aside>
+      <div class="card reco" id="reco" aria-live="polite"></div>
+      <div class="card"><h2>Ask the people <small>random agents who just travelled to both sites</small></h2><div id="interview"></div></div>
+      <div class="card"><h2>Head to head <small id="h-sub"></small></h2><div class="h2h" id="h2h"></div></div>
+      <div class="card"><h2>Road conditions <small>current roadworks, Oct 2026</small></h2><div id="roads"></div></div>
+      <div class="card">
+        <h2>Your priorities <small>MarketScore weights, renormalised</small></h2>
+        <div class="presets" id="presets"></div>
+        <div class="sliders" id="sliders"></div>
+        <div class="robust" id="robust"></div>
+      </div>
+      <div class="card" id="fixcard"><h2>What the fix changes <small id="fx-sub"></small></h2><div id="fix"></div></div>
+      <div class="card"><h2>Bottlenecks <small id="b-sub"></small></h2><div id="bottlenecks"></div></div>
+    </aside>
+  </main>
+</div>
+<script>/*__DECK__*/</script>
+<script>
+const DATA = /*__DATA__*/null;
+const { Deck, MapView, PathLayer, PolygonLayer, ColumnLayer, ScatterplotLayer, TextLayer, TripsLayer,
+        FlyToInterpolator, LightingEffect, AmbientLight, DirectionalLight } = deck;
+
+// ── Vocabulary ─────────────────────────────────────────────────────────────────
+const SITES = DATA.sites;                         // [lorenzkirche, kaufhof]
+const SHORT = { hauptmarkt: 'Hauptmarkt', lorenzkirche: 'Lorenzkirche', kaufhof: 'Kaufhof' };
+const SCENARIO_LABEL = { SUNNY_SAT: 'Sunny day', RAINY_SAT: 'Rainy day', SNOWY_SAT: 'Snowy day', CHRISTMAS_MARKET: 'Christmas market' };
+const MIT_LABEL = { none: 'None', delivery: 'Delivery window', loop: 'Loop layout', kiosk: 'U-Bahn kiosk' };
+const SLICES = { '05:30_DELIVERY': [19800, 25200], '11:30_PEAK': [39600, 45000], '15:00_LULL': [51300, 54000] };
+const SLICE_LABEL = { '05:30_DELIVERY': '05:30 delivery', '11:30_PEAK': '11:30 peak', '15:00_LULL': '15:00 lull' };
+const PERSONAS = [
+  { id: 'senior', name: 'Oma Helga', what: 'senior, rollator' },
+  { id: 'vendor', name: 'Markus', what: 'vendor, 3.5 t van' },
+  { id: 'commuter', name: 'Lukas', what: 'lunch commuter' },
+  { id: 'retailer', name: 'Frau Weber', what: 'shop owner nearby' },
+];
+const CRITERIA = [['accessibility', 'Accessibility'], ['footfall', 'Footfall'], ['fairness', 'Fairness'],
+                  ['localBusiness', 'Local business'], ['walkability', 'Walkability']];
+const PRESETS = {                      // IMPLEMENTATION_PLAN.md §6
+  Balanced: [0.30, 0.25, 0.20, 0.15, 0.10],
+  'Accessibility first': [0.45, 0.20, 0.15, 0.10, 0.10],
+  'Trader fairness first': [0.20, 0.20, 0.40, 0.10, 0.10],
+  'Local business first': [0.20, 0.25, 0.10, 0.35, 0.10],
+};
+const BN = { BOLLARD_BLOCKAGE: 'Bollard blockage', CROWDING: 'Crowding', COBBLESTONE_FRICTION: 'Cobblestones', ELEVATOR_CONGESTION: 'Elevator queue' };
+const T0 = 19800;
+
+const state = {
+  scenario: 'SUNNY_SAT', mit: 'none', t: 11.5 * 3600, playing: true,
+  weights: [...PRESETS.Balanced], preset: 'Balanced',
+  layers: { buildings: true, heat: true, trails: true, alerts: true, roads: true, diff: false }, view3d: true,
+  pair: 0, active: null,           // interview pair index; active interviewee id (routes highlighted on the maps)
+};
+
+const $ = (id) => document.getElementById(id);
+const rootEl = document.querySelector('.viz-root');
+const css = (name) => getComputedStyle(rootEl).getPropertyValue(name).trim();
+const rgb = (hex, a = 255) => { const h = hex.replace('#', ''); return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16), a]; };
+const tok = (name, a) => rgb(css(name), a);
+const run = (site, mit = state.mit, scenario = state.scenario) => DATA.runs[`${site}|${scenario}|${mit}`];
+const clock = (t) => `${String(Math.floor(t / 3600)).padStart(2, '0')}:${String(Math.floor((t % 3600) / 60)).padStart(2, '0')}`;
+const fmt = (v) => (Math.round(v * 10) / 10).toFixed(1);
+const sliceAt = (t) => {
+  for (const [k, [a, b]] of Object.entries(SLICES)) if (t >= a && t <= b) return k;
+  const gap = ([, [a, b]]) => Math.min(Math.abs(t - a), Math.abs(t - b));
+  return Object.entries(SLICES).sort((x, y) => gap(x) - gap(y))[0][0];
+};
+const centre = (poly) => [poly.reduce((a, p) => a + p[0], 0) / poly.length, poly.reduce((a, p) => a + p[1], 0) / poly.length];
+const marketScore = (r, w = state.weights) => {
+  const sum = w.reduce((a, b) => a + b, 0) || 1;
+  return CRITERIA.reduce((acc, [k], i) => acc + (w[i] / sum) * r.criteria[k], 0);
+};
+const ranked = () => SITES.map((s) => ({ s, r: run(s.id), score: marketScore(run(s.id)) })).sort((a, b) => b.score - a.score);
+
+// ── Two linked maps ────────────────────────────────────────────────────────────
+const lighting = () => new LightingEffect({
+  ambient: new AmbientLight({ color: [255, 255, 255], intensity: 1.6 }),
+  sun: new DirectionalLight({ color: [255, 250, 240], intensity: 1.4, direction: [-1, -2, -3] }),
+});
+const views = SITES.map((s) => {
+  const [lng, lat] = centre(s.polygon);
+  return { site: s, home: [lng, lat], vs: { longitude: lng, latitude: lat, zoom: 16.3, pitch: 55, bearing: -20, maxPitch: 75 } };
+});
+
+for (const v of views) {
+  const card = document.createElement('section');
+  card.className = 'card map';
+  card.innerHTML = `<div class="deck"></div><canvas class="weather"></canvas><div class="float sitebar"></div><div class="float legend"></div>`;
+  $('maps').appendChild(card);
+  v.el = card;
+  v.deck = new Deck({
+    parent: card.querySelector('.deck'),
+    views: new MapView({ repeat: false }),
+    viewState: v.vs,
+    controller: { dragRotate: true, touchRotate: true },
+    effects: [lighting()],
+    onViewStateChange: ({ viewState, interactionState }) => {
+      if (interactionState && (interactionState.isDragging || interactionState.isZooming || interactionState.isRotating)) stopTour();
+      link(v, viewState);
+    },
+    getTooltip: (info) => tooltip(info, v.site.id),
+  });
+}
+
+/** Moving one map moves the other the same way, relative to its own site. */
+function link(source, vs) {
+  const dLng = vs.longitude - source.home[0], dLat = vs.latitude - source.home[1];
+  for (const v of views) {
+    v.vs = v === source ? vs : { ...v.vs, zoom: vs.zoom, pitch: vs.pitch, bearing: vs.bearing,
+      longitude: v.home[0] + dLng, latitude: v.home[1] + dLat, transitionDuration: 0 };
+    v.deck.setProps({ viewState: v.vs });
+  }
+}
+function flyAll(target, ms = 1500) {
+  for (const v of views) {
+    v.vs = { ...v.vs, longitude: v.home[0], latitude: v.home[1], ...target, transitionDuration: ms, transitionInterpolator: new FlyToInterpolator({ speed: 1.4 }) };
+    v.deck.setProps({ viewState: v.vs });
+  }
+}
+function flyOne(siteId, lng, lat, zoom = 17.5) {
+  const v = views.find((x) => x.site.id === siteId);
+  link(v, { ...v.vs, longitude: lng, latitude: lat, zoom });
+}
+
+function heatCells(siteId) {
+  const slice = sliceAt(state.t);
+  const cur = run(siteId).bySlice[slice].heat;
+  if (!state.layers.diff || state.mit === 'none') {
+    let max = 0;
+    for (const s of SITES) for (const h of run(s.id).bySlice[slice].heat) max = Math.max(max, h[2]);
+    return { cells: cur.filter((h) => h[2] >= max * 0.04).map(([lng, lat, v]) => ({ p: [lng, lat], v, f: Math.pow(v / max, 0.6) })), max, diff: false, slice };
+  }
+  const base = new Map(run(siteId, 'none').bySlice[slice].heat.map((h) => [`${h[0]},${h[1]}`, h[2]]));
+  const curMap = new Map(cur.map((h) => [`${h[0]},${h[1]}`, h[2]]));
+  const cells = [];
+  let max = 0;
+  for (const k of new Set([...base.keys(), ...curMap.keys()])) {
+    const d = (curMap.get(k) ?? 0) - (base.get(k) ?? 0);
+    if (Math.abs(d) < 0.01) continue;
+    const [lng, lat] = k.split(',').map(Number);
+    cells.push({ p: [lng, lat], v: d });
+    max = Math.max(max, Math.abs(d));
+  }
+  for (const c of cells) c.f = c.v / (max || 1);
+  return { cells: cells.filter((c) => Math.abs(c.f) >= 0.05), max, diff: true, slice };
+}
+const seqColor = (f) => { const ramp = css('--seq').split(',').map((s) => s.trim()); return rgb(ramp[Math.min(ramp.length - 1, Math.max(0, Math.floor(f * ramp.length)))], 235); };
+const divColor = (f) => {
+  const mid = rgb(css('--div-mid')), end = rgb(css(f < 0 ? '--div-neg' : '--div-pos'));
+  const a = Math.min(1, Math.abs(f));
+  return [0, 1, 2].map((i) => Math.round(mid[i] + (end[i] - mid[i]) * a)).concat(240);
+};
+function positionAt(path, t) {
+  if (!path.length || t < path[0][2] || t > path[path.length - 1][2]) return null;
+  let lo = 0, hi = path.length - 1;
+  while (hi - lo > 1) { const m = (lo + hi) >> 1; if (path[m][2] <= t) lo = m; else hi = m; }
+  const a = path[lo], b = path[hi];
+  const f = b[2] > a[2] ? (t - a[2]) / (b[2] - a[2]) : 0;
+  return [a[0] + f * (b[0] - a[0]), a[1] + f * (b[1] - a[1])];
+}
+const onTop = { depthCompare: 'always', depthWriteEnabled: false };
+const font = { fontFamily: 'system-ui, Segoe UI, sans-serif', fontWeight: 600, fontSettings: { sdf: true }, outlineWidth: 4 };
+const sevTok = (s) => (s >= 0.75 ? '--critical' : s >= 0.5 ? '--serious' : '--warning');
+const interviewColor = (who) => (who === 'young' ? '--young' : '--persona-senior');
+
+function layersFor(siteId) {
+  const r = run(siteId);
+  const out = [];
+  const surface = tok('--surface-1'), ink = tok('--text-primary'), theme = css('--surface-1');
+  out.push(new PathLayer({ id: 'walk', data: DATA.streets.walk, getPath: (d) => d, getColor: tok('--street'), widthUnits: 'meters', getWidth: 2.2, widthMinPixels: 0.6, updateTriggers: { getColor: theme } }));
+  out.push(new PathLayer({ id: 'road', data: DATA.streets.road, getPath: (d) => d, getColor: tok('--road'), widthUnits: 'meters', getWidth: 4, widthMinPixels: 1, updateTriggers: { getColor: theme } }));
+  if (state.layers.buildings && DATA.buildings.length) {
+    out.push(new PolygonLayer({ id: 'buildings', data: DATA.buildings, getPolygon: (d) => d.ring, extruded: state.view3d, getElevation: (d) => d.h,
+      getFillColor: tok('--building', state.view3d ? 255 : 210), stroked: false, pickable: true,
+      material: { ambient: 0.35, diffuse: 0.6, shininess: 8, specularColor: [40, 40, 40] }, updateTriggers: { getFillColor: [theme, state.view3d] } }));
+  }
+  const site = SITES.find((s) => s.id === siteId);
+  out.push(new PolygonLayer({ id: 'site', data: [site], getPolygon: (d) => d.polygon, stroked: true, filled: true, getFillColor: tok('--text-primary', 30),
+    getLineColor: ink, getLineWidth: 3, lineWidthUnits: 'pixels', parameters: onTop, updateTriggers: { getFillColor: theme, getLineColor: theme } }));
+
+  if (state.layers.heat) {
+    const h = heatCells(siteId);
+    out.push(new ColumnLayer({ id: 'heat', data: h.cells, getPosition: (d) => d.p, diskResolution: 4, angle: 45, radius: (15 / Math.SQRT2) * 0.92,
+      extruded: state.view3d, getElevation: (d) => Math.abs(d.f) * 70, getFillColor: (d) => (h.diff ? divColor(d.f) : seqColor(d.f)), pickable: true,
+      material: { ambient: 0.6, diffuse: 0.5 },
+      updateTriggers: { getFillColor: [h.diff, h.slice, state.mit, state.scenario, theme], getElevation: [h.diff, h.slice, state.mit, state.scenario] } }));
+  }
+  if (state.layers.trails) {
+    out.push(new TripsLayer({ id: 'trips', data: r.trips, getPath: (d) => d.path.map((p) => [p[0], p[1]]), getTimestamps: (d) => d.path.map((p) => p[2] - T0),
+      getColor: (d) => tok(`--persona-${d.persona}`), currentTime: state.t - T0, trailLength: 420, fadeTrail: true, widthMinPixels: 3,
+      capRounded: true, jointRounded: true, parameters: onTop, updateTriggers: { getColor: theme } }));
+    const heads = [];
+    for (const d of r.trips) { const p = positionAt(d.path, state.t); if (p) heads.push({ p, persona: d.persona }); }
+    out.push(new ScatterplotLayer({ id: 'heads', data: heads, getPosition: (d) => d.p, getRadius: 5, radiusUnits: 'pixels', stroked: true, lineWidthUnits: 'pixels',
+      getLineWidth: 2, getFillColor: (d) => tok(`--persona-${d.persona}`), getLineColor: surface, pickable: true, parameters: onTop }));
+  }
+  if (state.layers.roads && DATA.roadConditions.length) {
+    out.push(new ScatterplotLayer({ id: 'roads', data: DATA.roadConditions, getPosition: (d) => [d.lng, d.lat], getRadius: 8, radiusUnits: 'pixels',
+      stroked: true, filled: true, getFillColor: surface, getLineColor: tok('--serious'), lineWidthUnits: 'pixels', getLineWidth: 3,
+      pickable: true, parameters: onTop, updateTriggers: { getFillColor: theme } }));
+    out.push(new TextLayer({ id: 'road-labels', data: DATA.roadConditions, ...font, getPosition: (d) => [d.lng, d.lat],
+      getText: (d) => (d.effect === 'elevator_out' ? 'Lift: no street exit' : d.effect === 'closed' ? 'Closed' : 'Roadworks'),
+      getSize: 11, getColor: ink, getTextAnchor: 'start', getPixelOffset: [12, 0], outlineColor: surface, parameters: onTop }));
+  }
+  if (state.layers.alerts) {
+    const bns = r.bySlice[sliceAt(state.t)].bottlenecks;
+    out.push(new ScatterplotLayer({ id: 'alerts', data: bns, getPosition: (d) => [d.lng, d.lat], getRadius: 9, radiusUnits: 'pixels', stroked: true, filled: true,
+      getFillColor: surface, getLineColor: (b) => tok(sevTok(b.severity)), lineWidthUnits: 'pixels', getLineWidth: 3.5, pickable: true, parameters: onTop }));
+    out.push(new TextLayer({ id: 'alert-labels', data: bns.slice(0, 2), ...font, getPosition: (d) => [d.lng, d.lat], getText: (d) => `${BN[d.type]} ${Math.round(d.severity * 100)}%`,
+      getSize: 12, getColor: ink, getTextAnchor: 'start', getPixelOffset: [14, 0], outlineColor: surface, parameters: onTop }));
+  }
+  const fix = DATA.mitigations[`${siteId}|${state.mit}`];
+  if (fix && fix.lng !== undefined) {
+    out.push(new ScatterplotLayer({ id: 'fix', data: [fix], getPosition: (d) => [d.lng, d.lat], getRadius: 11, radiusUnits: 'pixels', stroked: true,
+      getFillColor: ink, getLineColor: surface, lineWidthUnits: 'pixels', getLineWidth: 3, parameters: onTop }));
+    out.push(new TextLayer({ id: 'fix-label', data: [fix], ...font, getPosition: (d) => [d.lng, d.lat], getText: () => 'Fix: express kiosk', getSize: 13,
+      getColor: ink, getTextAnchor: 'start', getPixelOffset: [16, 0], outlineColor: surface, parameters: onTop }));
+  }
+
+  // The interviewee's own route to this site, drawn on top and walked by a labelled marker
+  const iv = activeInterviewee();
+  const trip = iv?.trips.find((t) => t.siteId === siteId);
+  if (trip && trip.path.length) {
+    const col = tok(interviewColor(iv.who));
+    const dur = trip.path[trip.path.length - 1][2] || 1;
+    const p = positionAt(trip.path, ((performance.now() / 1000) % 8) / 8 * dur) ?? [trip.path[0][0], trip.path[0][1]];
+    out.push(new PathLayer({ id: 'iv-route', data: [trip.path.map((q) => [q[0], q[1]])], getPath: (d) => d, getColor: col, widthUnits: 'pixels', getWidth: 6,
+      capRounded: true, jointRounded: true, parameters: onTop }));
+    out.push(new ScatterplotLayer({ id: 'iv-start', data: [trip.path[0]], getPosition: (d) => [d[0], d[1]], getRadius: 7, radiusUnits: 'pixels', stroked: true,
+      getFillColor: surface, getLineColor: col, lineWidthUnits: 'pixels', getLineWidth: 3, parameters: onTop }));
+    out.push(new TextLayer({ id: 'iv-start-label', data: [trip.path[0]], ...font, getPosition: (d) => [d[0], d[1]], getText: () => `Start: ${trip.start === 'home' ? 'home' : trip.start}`,
+      getSize: 12, getColor: ink, getTextAnchor: 'end', getPixelOffset: [-12, 0], outlineColor: surface, parameters: onTop }));
+    out.push(new ScatterplotLayer({ id: 'iv-head', data: [p], getPosition: (d) => d, getRadius: 9, radiusUnits: 'pixels', stroked: true,
+      getFillColor: col, getLineColor: surface, lineWidthUnits: 'pixels', getLineWidth: 3, parameters: onTop }));
+    out.push(new TextLayer({ id: 'iv-label', data: [p], ...font, getPosition: (d) => d, getText: () => `${iv.name} · ${trip.minutes} min`, getSize: 14,
+      getColor: ink, getTextAnchor: 'start', getPixelOffset: [14, -2], outlineColor: surface, parameters: onTop }));
+  }
+  return out;
+}
+
+function tooltip({ object, layer }, siteId) {
+  if (!object || !layer) return null;
+  const style = { background: css('--surface-1'), color: css('--text-primary'), border: `1px solid ${css('--border')}`, borderRadius: '8px', fontSize: '12px',
+                  padding: '6px 9px', boxShadow: css('--shadow'), maxWidth: '280px' };
+  let html = null;
+  if (layer.id === 'heat') html = state.layers.diff && state.mit !== 'none' ? `<b>${object.v > 0 ? '+' : ''}${fmt(object.v)}</b> people vs. no fix` : `<b>${fmt(object.v)}</b> people on average in this 15 m cell`;
+  if (layer.id === 'alerts') html = `<b>${BN[object.type]}</b> · ${object.time} · severity ${Math.round(object.severity * 100)}%<br>${object.cause}`;
+  if (layer.id === 'heads') { const p = PERSONAS.find((x) => x.id === object.persona); html = `<b>${p.name}</b> (${p.what}) at ${clock(state.t)}`; }
+  if (layer.id === 'buildings') html = `${object.addr ?? 'Building'} · ${Math.round(object.h)} m high`;
+  if (layer.id === 'roads') html = `<b>Roadworks: ${object.street ?? ''}</b><br>${object.title}<br><span style="opacity:.7">until ${object.until ?? 'open-ended'} · ${object.sourceTitle ?? 'source'}</span>`;
+  return html && { html, style };
+}
+
+function draw() { for (const v of views) v.deck.setProps({ layers: layersFor(v.site.id) }); }
+
+// ── Real rain and snow over the maps ───────────────────────────────────────────
+const drops = Array.from({ length: 260 }, () => ({ x: Math.random(), y: Math.random(), z: 0.4 + Math.random() * 0.6, w: Math.random() * Math.PI * 2 }));
+function drawWeather(dt) {
+  const kind = state.scenario === 'RAINY_SAT' ? 'rain' : state.scenario === 'SNOWY_SAT' ? 'snow' : null;
+  const dark = getComputedStyle(rootEl).colorScheme === 'dark';
+  for (const d of drops) {
+    if (kind === 'rain') { d.y += dt * 1.6 * d.z; d.x += dt * 0.12 * d.z; }
+    if (kind === 'snow') { d.y += dt * 0.09 * d.z; d.w += dt * 1.5; d.x += Math.sin(d.w) * dt * 0.02; }
+    if (d.y > 1) { d.y -= 1; d.x = Math.random(); }
+    if (d.x > 1) d.x -= 1; if (d.x < 0) d.x += 1;
+  }
+  for (const v of views) {
+    const c = v.el.querySelector('canvas.weather');
+    const w = c.clientWidth, h = c.clientHeight, dpr = window.devicePixelRatio || 1;
+    if (c.width !== w * dpr) { c.width = w * dpr; c.height = h * dpr; }
+    const g = c.getContext('2d');
+    g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    g.clearRect(0, 0, w, h);
+    if (!kind) continue;
+    g.fillStyle = kind === 'rain' ? (dark ? 'rgba(20,30,50,0.25)' : 'rgba(70,90,120,0.12)') : (dark ? 'rgba(200,210,230,0.08)' : 'rgba(255,255,255,0.25)');
+    g.fillRect(0, 0, w, h);
+    if (kind === 'rain') {
+      g.strokeStyle = dark ? 'rgba(170,200,255,0.55)' : 'rgba(60,90,140,0.45)';
+      g.lineWidth = 1.2;
+      g.beginPath();
+      for (const d of drops) { const x = d.x * w, y = d.y * h, l = 14 * d.z; g.moveTo(x, y); g.lineTo(x + l * 0.25, y + l); }
+      g.stroke();
+    } else {
+      for (const d of drops) {
+        g.beginPath(); g.arc(d.x * w, d.y * h, 1.2 + 2.2 * d.z, 0, Math.PI * 2);
+        g.fillStyle = 'rgba(255,255,255,0.95)'; g.fill();
+        g.lineWidth = 0.8; g.strokeStyle = dark ? 'rgba(0,0,0,0.25)' : 'rgba(80,100,130,0.45)'; g.stroke();
+      }
+    }
+  }
+}
+
+// ── Panels ─────────────────────────────────────────────────────────────────────
+function seg(el, items, key, after) {
+  el.innerHTML = '';
+  for (const [v, label] of items) {
+    const b = document.createElement('button');
+    b.textContent = label; b.dataset.v = v;
+    b.onclick = () => { stopTour(); state[key] = v; after?.(); render(); };
+    el.appendChild(b);
+  }
+}
+function sync() {
+  for (const [id, key] of [['f-scenario', 'scenario'], ['f-mit', 'mit']]) for (const b of $(id).children) b.setAttribute('aria-pressed', String(b.dataset.v === state[key]));
+  for (const b of $('layers').children) {
+    const k = b.dataset.k;
+    b.setAttribute('aria-pressed', String(k === 'view3d' ? state.view3d : state.layers[k]));
+    if (k === 'diff') b.style.display = state.mit === 'none' ? 'none' : '';
+  }
+  for (const b of $('presets').children) b.setAttribute('aria-pressed', String(b.dataset.v === state.preset));
+}
+
+function buildStatic() {
+  seg($('f-scenario'), DATA.scenarios.map((s) => [s, SCENARIO_LABEL[s]]), 'scenario', () => { state.pair = 0; state.active = null; stopSpeech(); });
+  seg($('f-mit'), Object.entries(MIT_LABEL), 'mit', () => { state.layers.diff = state.mit !== 'none'; });
+  const chips = [['view3d', '3D'], ['buildings', 'Buildings'], ['heat', 'Footfall'], ['trails', 'Agents'], ['alerts', 'Bottlenecks'], ['roads', 'Roadworks'], ['diff', 'Fix: before → after']];
+  for (const [k, label] of chips) {
+    const b = document.createElement('button');
+    b.className = 'chip'; b.textContent = label; b.dataset.k = k;
+    b.onclick = () => {
+      stopTour();
+      if (k === 'view3d') { state.view3d = !state.view3d; flyAll({ pitch: state.view3d ? 55 : 0, bearing: state.view3d ? -20 : 0 }, 900); }
+      else state.layers[k] = !state.layers[k];
+      render();
+    };
+    $('layers').appendChild(b);
+  }
+  for (const name of Object.keys(PRESETS)) {
+    const b = document.createElement('button');
+    b.className = 'chip'; b.textContent = name; b.dataset.v = name;
+    b.onclick = () => { state.preset = name; state.weights = [...PRESETS[name]]; buildSliders(); render(); };
+    $('presets').appendChild(b);
+  }
+  buildSliders();
+  const pct = (t) => ((t - 19800) / (54000 - 19800)) * 100;
+  for (const [k, [a, b]] of Object.entries(SLICES)) {
+    const band = document.createElement('div');
+    band.className = 'tl-band'; band.style.left = `${pct(a)}%`; band.style.width = `${pct(b) - pct(a)}%`;
+    $('tl').insertBefore(band, $('time'));
+    const s = document.createElement('span');
+    s.textContent = SLICE_LABEL[k]; s.style.left = `${(pct(a) + pct(b)) / 2}%`;
+    $('tl-slices').appendChild(s);
+  }
+}
+
+function buildSliders() {
+  const el = $('sliders');
+  el.innerHTML = '';
+  const sum = state.weights.reduce((a, b) => a + b, 0) || 1;
+  CRITERIA.forEach(([, label], i) => {
+    const l = document.createElement('div'); l.textContent = label;
+    const input = document.createElement('input');
+    input.type = 'range'; input.min = 0; input.max = 1; input.step = 0.05; input.value = state.weights[i];
+    input.setAttribute('aria-label', `${label} weight`);
+    const w = document.createElement('div'); w.className = 'w'; w.textContent = `${Math.round((state.weights[i] / sum) * 100)}%`;
+    input.oninput = () => {
+      state.weights[i] = +input.value; state.preset = null;
+      const s = state.weights.reduce((a, b) => a + b, 0) || 1;
+      el.querySelectorAll('.w').forEach((x, j) => (x.textContent = `${Math.round((state.weights[j] / s) * 100)}%`));
+      sync(); recoPanel(); siteBars(); h2hPanel(); fixPanel(); robust();
+    };
+    el.append(l, input, w);
+  });
+}
+
+function siteBars() {
+  const order = ranked();
+  for (const v of views) {
+    const r = run(v.site.id), score = marketScore(r);
+    const win = order[0].s.id === v.site.id;
+    v.el.querySelector('.sitebar').innerHTML = `
+      <div class="name">${SHORT[v.site.id]}${win ? '<span class="win">leads</span>' : ''}</div>
+      <div class="score">${fmt(score)}<small>MarketScore</small></div>
+      <div class="ps">${PERSONAS.map((p) => `<span><span class="dot" style="background:var(--persona-${p.id})"></span>${p.name.split(' ').pop()} <b>${fmt(r.personas[p.id].score)}</b>${r.personas[p.id].score < 40 ? ' ⚠' : ''}</span>`).join('')}</div>`;
+  }
+}
+
+function legends() {
+  for (const v of views) {
+    const parts = [];
+    if (state.layers.heat) {
+      const h = heatCells(v.site.id);
+      parts.push(h.diff
+        ? `<div class="title">Where the fix moves people</div><div class="ramp" style="background:linear-gradient(90deg,${css('--div-neg')},${css('--div-mid')},${css('--div-pos')})"></div><div class="ramp-labels"><span>fewer</span><span>0</span><span>more</span></div>`
+        : `<div class="title">Footfall · ${SLICE_LABEL[h.slice]}</div><div class="ramp" style="background:linear-gradient(90deg,${css('--seq')})"></div><div class="ramp-labels"><span>few</span><span>${fmt(h.max)} people/cell</span></div>`);
+    }
+    if (v === views[0]) {
+      const keys = [];
+      if (state.layers.trails) keys.push(...PERSONAS.slice(0, 3).map((p) => `<span class="key"><span class="dot" style="background:var(--persona-${p.id})"></span>${p.name}</span>`));
+      if (state.layers.roads) keys.push(`<span class="key"><span class="ring" style="border-color:var(--serious)"></span>roadworks</span>`);
+      if (state.layers.alerts) keys.push(`<span class="key"><span class="ring" style="border-color:var(--critical)"></span>bottleneck</span>`);
+      if (keys.length) parts.push(`<div class="keys">${keys.join('')}</div>`);
+    }
+    const el = v.el.querySelector('.legend');
+    el.innerHTML = parts.join('');
+    el.style.display = parts.length ? '' : 'none';
+  }
+}
+
+// ── Recommendation ─────────────────────────────────────────────────────────────
+const FIX_KEYS = { delivery: /delivery|bollard/i, loop: /loop/i, kiosk: /kiosk/i };
+function roadNearby(siteId) {
+  const [lng, lat] = centre(SITES.find((s) => s.id === siteId).polygon);
+  return DATA.roadConditions.filter((c) => Math.hypot((c.lng - lng) * 72400, (c.lat - lat) * 111200) <= 300);
+}
+function computedBrief() {
+  const [win, second] = ranked();
+  const lead = CRITERIA.map(([k, l]) => ({ l, d: win.r.criteria[k] - second.r.criteria[k], a: win.r.criteria[k], b: second.r.criteria[k] }))
+    .sort((x, y) => y.d - x.d).filter((x) => x.d > 1).slice(0, 2);
+  const failing = PERSONAS.filter((p) => win.r.personas[p.id].score < 40);
+  const weakest = [...PERSONAS].sort((a, b) => win.r.personas[a.id].score - win.r.personas[b.id].score)[0];
+  const works = roadNearby(win.s.id);
+  const fixes = ['delivery', 'loop', 'kiosk'].map((m) => ({ m, label: DATA.mitigations[`${win.s.id}|${m}`]?.label, before: win.score, after: marketScore(run(win.s.id, m)) }))
+    .sort((a, b) => (b.after - b.before) - (a.after - a.before));
+  const fix = state.mit === 'none' && fixes[0].after - fixes[0].before >= 0.5 ? fixes[0] : null;
+  return {
+    computed: true, recommended: win.s.id,
+    headline: `${SHORT[win.s.id]} fits these priorities better: ${fmt(win.score)} points against ${fmt(second.score)} for ${SHORT[second.s.id]}.`,
+    why: [
+      ...lead.map((x) => `Better ${x.l.toLowerCase()}: ${fmt(x.a)} vs ${fmt(x.b)} at ${SHORT[second.s.id]}.`),
+      failing.length ? `Warning: it fails ${failing.map((p) => p.name).join(' and ')} (below 40).` : 'No stakeholder group falls below the 40-point guard.',
+      ...(works.length ? [`Road conditions: ${works.length} current roadworks within 300 m, e.g. ${works[0].street ?? works[0].title}. They are already included in the walking routes.`] : []),
+    ],
+    tradeoff: `${weakest.name} gains least (${fmt(win.r.personas[weakest.id].score)}): ${win.r.personas[weakest.id].topFriction}.`,
+    nextStep: fix ? `Add the ${fix.label.toLowerCase()}: it lifts ${SHORT[win.s.id]} from ${fmt(fix.before)} to ${fmt(fix.after)}.`
+      : state.mit !== 'none' ? `The ${MIT_LABEL[state.mit].toLowerCase()} is applied to both sites; see what it changes below.` : 'None of the three fixes improves this site noticeably.',
+    fixKey: fix?.m,
+  };
+}
+function recoPanel() {
+  const claude = state.preset ? DATA.briefs[`${state.scenario}|${state.mit}|${state.preset}`] : null;
+  const b = claude ?? computedBrief();
+  const fixKey = b.fixKey ?? (state.mit === 'none' ? Object.keys(FIX_KEYS).find((k) => FIX_KEYS[k].test(b.nextStep)) : null);
+  const bestFor = PERSONAS.map((p) => {
+    const [a, c] = SITES.map((s) => run(s.id).personas[p.id].score);
+    const name = Math.abs(a - c) < 0.5 ? 'equal' : SHORT[(a > c ? SITES[0] : SITES[1]).id];
+    return `<span><span class="dot" style="background:var(--persona-${p.id})"></span>${p.name}: <strong>${name}</strong></span>`;
+  }).join('');
+  const meta = claude ? `${claude.model}<br>${claude.verified ? 'every number checked against the simulation ✓' : ''}` : 'computed from the scores';
+  const badge = claude ? '✦ Claude’s recommendation' : '∑ Quick summary';
+  const hint = claude ? '' : state.preset ? 'No Claude brief yet: set ANTHROPIC_API_KEY and run npm run sim:viz.' : 'Custom weights: summary computed live. Pick a preset for Claude’s brief.';
+  $('reco').innerHTML = `
+    <div class="top"><span class="badge">${badge}</span><span class="meta">${meta}</span></div>
+    <p class="headline">${b.headline}</p>
+    <ul>${b.why.map((w) => `<li>${w}</li>`).join('')}</ul>
+    <div class="bestfor">${bestFor}</div>
+    <p class="line"><b>Trade-off</b><span>${b.tradeoff}</span></p>
+    <p class="line"><b>Next step</b><span>${b.nextStep}</span></p>
+    <div class="actions">${fixKey ? `<button class="btn primary" id="reco-fix">Try the ${MIT_LABEL[fixKey].toLowerCase()}</button>` : ''}</div>
+    ${claude && !claude.verified ? `<div class="warn"><span style="color:var(--serious)">⚠</span> Not found in the simulation: ${claude.unverified.join(', ')}.</div>` : ''}
+    ${hint ? `<div class="hint">${hint}</div>` : ''}`;
+  if (fixKey) $('reco-fix').onclick = () => { stopTour(); state.mit = fixKey; state.layers.diff = true; render(); };
+}
+
+// ── Head to head ───────────────────────────────────────────────────────────────
+function h2hPanel() {
+  const [L, R] = SITES;
+  const rl = run(L.id), rr = run(R.id);
+  $('h-sub').textContent = `${SCENARIO_LABEL[state.scenario]} · ${MIT_LABEL[state.mit]}`;
+  const row = (label, a, b, dot) => {
+    const lead = Math.abs(a - b) < 0.5 ? null : a > b ? 'l' : 'r';
+    return `<span class="num l ${lead === 'l' ? 'lead' : ''}">${fmt(a)}</span>
+      <div class="bar left"><i style="width:${a}%;${lead === 'l' ? '' : 'opacity:.45'}"></i></div>
+      <span class="lab">${dot ? `<span class="dot" style="background:var(--persona-${dot})"></span>` : ''}${label}</span>
+      <div class="bar right"><i style="width:${b}%;${lead === 'r' ? '' : 'opacity:.45'}"></i></div>
+      <span class="num r ${lead === 'r' ? 'lead' : ''}">${fmt(b)}</span>`;
+  };
+  $('h2h').innerHTML = `<span class="hd l" style="grid-column:1/3">${SHORT[L.id]}</span><span class="hd"></span><span class="hd r" style="grid-column:4/6">${SHORT[R.id]}</span>` +
+    row('MarketScore', marketScore(rl), marketScore(rr)) + '<div class="sep"></div>' +
+    PERSONAS.map((p) => row(p.name, rl.personas[p.id].score, rr.personas[p.id].score, p.id)).join('') + '<div class="sep"></div>' +
+    CRITERIA.map(([k, l]) => row(l, rl.criteria[k], rr.criteria[k])).join('');
+}
+function robust() {
+  const wins = {};
+  for (const w of Object.values(PRESETS)) {
+    const best = SITES.map((s) => [s.id, marketScore(run(s.id), w)]).sort((a, b) => b[1] - a[1])[0][0];
+    wins[best] = (wins[best] ?? 0) + 1;
+  }
+  $('robust').textContent = 'Winner per preset: ' + Object.entries(wins).sort((a, b) => b[1] - a[1]).map(([id, c]) => `${SHORT[id]} ${c} of ${Object.keys(PRESETS).length}`).join(' · ');
+}
+
+// ── Road conditions ────────────────────────────────────────────────────────────
+function roadsPanel() {
+  const items = DATA.roadConditions;
+  if (!items.length) { $('roads').innerHTML = '<div class="note">No current roadworks loaded.</div>'; return; }
+  const near = (c) => SITES.filter((s) => roadNearby(s.id).includes(c)).map((s) => SHORT[s.id]);
+  $('roads').innerHTML = items.map((c, i) => `<div class="rw" data-i="${i}"><span class="ring" style="border-color:var(--serious)"></span>
+    <span><b>${c.street ?? c.title}</b> · ${c.effect.replace('_', ' ')}${near(c).length ? ` · near ${near(c).join(' & ')}` : ''}</span>
+    <span class="d">${c.title}. Until ${c.until ?? 'open-ended'} · <a href="${c.source}" target="_blank" rel="noopener">${c.sourceTitle ?? 'source'}</a></span></div>`).join('') +
+    '<p class="hint">Researched from the city of Nuremberg’s roadworks list, VAG and nordbayern.de. Narrowed or rough stretches slow walkers in the simulation; closures block vans; the closed lift blocks seniors.</p>';
+  for (const el of $('roads').querySelectorAll('.rw')) {
+    el.onclick = (e) => {
+      if (e.target.tagName === 'A') return;
+      const c = items[+el.dataset.i];
+      stopTour();
+      const site = SITES.map((s) => ({ s, d: Math.hypot(...centre(s.polygon).map((v, j) => (v - [c.lng, c.lat][j]) * (j ? 111200 : 72400))) })).sort((a, b) => a.d - b.d)[0].s;
+      flyOne(site.id, c.lng, c.lat, 17.2);
+    };
+  }
+}
+
+// ── Interviews with voices ─────────────────────────────────────────────────────
+const pairs = () => {
+  const list = DATA.interviews.filter((iv) => iv.scenario === state.scenario);
+  const out = [];
+  for (let i = 0; i < list.length; i += 2) out.push(list.slice(i, i + 2));
+  return out;
+};
+const currentPair = () => pairs()[state.pair % pairs().length] ?? [];
+const activeInterviewee = () => currentPair().find((iv) => iv.id === state.active) ?? null;
+const synth = window.speechSynthesis;
+let speaking = false, speechQueue = [];
+
+function pickVoices() {
+  const voices = synth ? synth.getVoices().filter((v) => /^en/i.test(v.lang)) : [];
+  const find = (re, not) => voices.find((v) => re.test(v.name) && v !== not);
+  const young = find(/aria|jenny|zira|emma|libby|sonia|ava|samantha|female/i) ?? voices[0];
+  const senior = find(/hazel|susan|catherine|linda|natasha|moira|karen|heera/i, young) ?? young;
+  const host = find(/guy|david|mark|ryan|george|daniel|alex|male/i) ?? voices[0];
+  return { young, senior, host };
+}
+function stopSpeech() {
+  speechQueue = [];
+  if (synth) synth.cancel();
+  speaking = false;
+  document.querySelectorAll('.speaking').forEach((e) => e.classList.remove('speaking'));
+  const b = $('iv-play'); if (b) b.textContent = '▶ Play interview';
+}
+function speak(lines, onDone) {
+  if (!synth) { onDone?.(); return; }
+  const v = pickVoices();
+  speechQueue = [...lines];
+  speaking = true;
+  const next = () => {
+    const line = speechQueue.shift();
+    document.querySelectorAll('.speaking').forEach((e) => e.classList.remove('speaking'));
+    if (!line || !speaking) { speaking = false; onDone?.(); const b = $('iv-play'); if (b) b.textContent = '▶ Play interview'; return; }
+    if (line.el) line.el.classList.add('speaking');
+    if (line.who) { state.active = line.who.id; draw(); }
+    const u = new SpeechSynthesisUtterance(line.text);
+    const role = line.who ? line.who.who : 'host';
+    u.voice = v[role] ?? null;
+    u.rate = role === 'senior' ? 0.82 : role === 'young' ? 1.06 : 1.0;
+    u.pitch = role === 'senior' ? 0.78 : role === 'young' ? 1.2 : 0.95;
+    u.onend = next; u.onerror = next;
+    synth.speak(u);
+  };
+  next();
+}
+
+function interviewPanel() {
+  const pair = currentPair();
+  if (!pair.length) { $('interview').innerHTML = '<div class="note">No interviews for this weather.</div>'; return; }
+  if (!pair.some((iv) => iv.id === state.active)) state.active = pair[0].id;
+  const person = (iv) => {
+    const col = interviewColor(iv.who);
+    const rates = iv.trips.map((t) => `<span>${SHORT[t.siteId]}</span><div class="t"><i style="width:${t.rating * 10}%;background:var(${col})"></i></div><span class="v">${t.rating}/10</span>
+      <span class="from">from ${t.start === 'home' ? 'home' : t.start} · ${t.minutes} min</span>`).join('');
+    return `<div class="person ${iv.id === state.active ? 'on' : ''}" data-id="${iv.id}">
+      <div class="who"><span class="avatar" style="background:var(${col})">${iv.name[0]}</span>
+      <div><div class="nm">${iv.name}, ${iv.age}</div><div class="ab">${iv.about}</div></div></div>
+      <div class="rate">${rates}</div></div>`;
+  };
+  $('interview').innerHTML = `<div class="people">${pair.map(person).join('')}</div>
+    <div class="actions">
+      <button class="btn primary" id="iv-play">${speaking ? '■ Stop' : '▶ Play interview'}</button>
+      <button class="btn" id="iv-next">🎲 Ask someone else</button>
+    </div>`;
+  for (const el of $('interview').querySelectorAll('.person')) el.onclick = () => { stopSpeech(); state.active = el.dataset.id; interviewPanel(); draw(); };
+  $('iv-next').onclick = () => { stopSpeech(); state.pair = (state.pair + 1) % pairs().length; state.active = null; interviewPanel(); draw(); };
+  $('iv-play').onclick = () => { if (speaking) return stopSpeech(); stopTour(); playPair(); };
+}
+/** Each person gives her feedback in one go: how the trips went, her marks, and her choice. */
+function playPair(onDone) {
+  const lines = currentPair().map((iv) => ({ who: iv, text: [iv.answers.commute, iv.answers.rating, iv.answers.future].join(' ') }));
+  $('iv-play').textContent = '■ Stop';
+  speak(lines.map((l) => ({ ...l, get el() {
+    state.active = l.who.id;
+    interviewPanel();
+    $('iv-play').textContent = '■ Stop';
+    return document.querySelector(`.person[data-id="${l.who.id}"]`);
+  } })), onDone);
+}
+
+function fixPanel() {
+  const card = $('fixcard');
+  if (state.mit === 'none') { card.style.display = 'none'; return; }
+  card.style.display = '';
+  $('fx-sub').textContent = MIT_LABEL[state.mit];
+  const cell = (a, b) => {
+    const d = b - a;
+    const col = Math.abs(d) < 0.5 ? 'var(--muted)' : d > 0 ? 'var(--delta-good)' : 'var(--delta-bad)';
+    return `<span>${fmt(b)}</span><span style="color:${col};font-weight:600">${Math.abs(d) < 0.5 ? '–' : (d > 0 ? '▲ +' : '▼ ') + fmt(d)}</span>`;
+  };
+  const [L, R] = SITES;
+  const rows = [['MarketScore', (r) => marketScore(r)], ...CRITERIA.map(([k, l]) => [l, (r) => r.criteria[k]]), ...PERSONAS.map((p) => [p.name, (r) => r.personas[p.id].score])];
+  $('fix').innerHTML = `<div class="deltas"><span class="h"></span><span class="h">${SHORT[L.id]}</span><span class="h"></span><span class="h">${SHORT[R.id]}</span><span class="h"></span>
+    ${rows.map(([label, get]) => `<span class="l">${label}</span>${cell(get(run(L.id, 'none')), get(run(L.id)))}${cell(get(run(R.id, 'none')), get(run(R.id)))}`).join('')}</div>
+    <p class="hint">Re-simulated with the same seed. On the maps, blue cells lost people and red cells gained them.</p>`;
+}
+
+function bottleneckPanel() {
+  const slice = sliceAt(state.t);
+  const all = SITES.flatMap((s) => run(s.id).bySlice[slice].bottlenecks.slice(0, 4).map((b) => ({ ...b, site: s.id })));
+  $('b-sub').textContent = `${SLICE_LABEL[slice]} · click to fly there`;
+  $('bottlenecks').innerHTML = all.length ? all.map((b, i) => `<div class="bn" data-i="${i}"><span class="ring" style="border-color:var(${sevTok(b.severity)})"></span>
+    <span>${SHORT[b.site]} · ${BN[b.type]} · ${b.time}</span><span class="sev">${Math.round(b.severity * 100)}%</span><span class="cause">${b.cause}</span></div>`).join('')
+    : '<div class="note">No bottlenecks in this time slice.</div>';
+  for (const el of $('bottlenecks').querySelectorAll('.bn')) el.onclick = () => { const b = all[+el.dataset.i]; stopTour(); flyOne(b.site, b.lng, b.lat); };
+}
+
+function render() {
+  sync();
+  $('sub').textContent = `${SCENARIO_LABEL[state.scenario]} · seed ${DATA.seed} · every number computed by the twin`;
+  draw(); siteBars(); legends(); recoPanel(); interviewPanel(); h2hPanel(); roadsPanel(); robust(); fixPanel(); bottleneckPanel();
+}
+
+// ── Time ───────────────────────────────────────────────────────────────────────
+const timeInput = $('time');
+let lastSlice = sliceAt(state.t);
+function setTime(t) {
+  state.t = t;
+  timeInput.value = t;
+  $('clock').textContent = clock(t);
+  const s = sliceAt(t);
+  if (s !== lastSlice) { lastSlice = s; bottleneckPanel(); legends(); }
+}
+timeInput.oninput = () => { stopTour(); setTime(+timeInput.value); draw(); };
+$('play').onclick = () => { state.playing = !state.playing; $('play').textContent = state.playing ? '❚❚' : '▶'; };
+let last = performance.now();
+function tick(now) {
+  const dt = Math.min(0.1, (now - last) / 1000);
+  last = now;
+  if (state.playing) { let t = state.t + dt * 300; if (t > 54000) t = 19800; setTime(t); }
+  draw();   // the interviewee marker walks continuously
+  drawWeather(dt);
+  requestAnimationFrame(tick);
+}
+
+// ── Guided tour ────────────────────────────────────────────────────────────────
+const TOUR = [
+  { title: 'Two candidates, one simulated Saturday', text: 'Left: St. Lorenzkirche plaza. Right: the former Kaufhof. Same city, same people, same timetable. Move one map and the other follows.',
+    go: () => { Object.assign(state, { mit: 'none', scenario: 'SUNNY_SAT' }); Object.assign(state.layers, { heat: false, trails: true, diff: false, roads: true }); setTime(41400); flyAll({ zoom: 15.6, pitch: 58, bearing: -35 }, 2200); } },
+  { title: 'Current roadworks are part of the model', text: 'Orange rings are live roadworks from the city of Nuremberg. They slow walkers and close streets to vans. Lorenzkirche’s lift has no step-free street exit right now.',
+    go: () => { flyAll({ zoom: 16.4, pitch: 50, bearing: -10 }, 1800); } },
+  { title: '11:30 · the lunch peak', text: 'Towers show how many people stand in each 15 m cell, on the same scale on both sides.',
+    go: () => { state.layers.heat = true; setTime(41400); flyAll({ pitch: 60, bearing: 15 }, 1800); } },
+  { title: 'Ask the people', text: 'A random student and a random senior travelled to both sites. Listen to their feedback.',
+    go: () => { state.layers.heat = false; }, after: () => playPair(), wait: 'speech' },
+  { title: 'Same day, but it rains', text: 'Open squares lose seniors; the covered Kaufhof keeps them dry. Watch the scores on top of each map.',
+    go: () => { stopSpeech(); state.scenario = 'RAINY_SAT'; state.pair = 0; state.active = null; } },
+  { title: 'And in snow', text: 'Snow slows everyone on open streets, and cobblestones get slippery for rollators. Fewer people come to an outdoor market.',
+    go: () => { state.scenario = 'SNOWY_SAT'; state.pair = 0; state.active = null; } },
+  { title: 'Claude proposes a fix: loop layout', text: 'The engine re-simulates both sites. Blue cells lost people, red cells gained them.',
+    go: () => { state.scenario = 'SUNNY_SAT'; state.mit = 'loop'; Object.assign(state.layers, { diff: true, heat: true, trails: false }); flyAll({ zoom: 17, pitch: 50 }, 1600); } },
+];
+let tourStep = -1, tourTimer = null;
+function showCaption() {
+  const c = $('caption');
+  if (tourStep < 0) { c.style.display = 'none'; return; }
+  const s = TOUR[tourStep];
+  c.innerHTML = `<b>${s.title}</b><span>${s.text}</span><div class="steps">${TOUR.map((_, i) => `<i class="${i <= tourStep ? 'on' : ''}"></i>`).join('')}</div>`;
+  c.style.display = 'block';
+}
+function step() {
+  tourStep++;
+  if (tourStep >= TOUR.length) return stopTour();
+  const s = TOUR[tourStep];
+  s.go();
+  state.playing = true; $('play').textContent = '❚❚';
+  render(); showCaption();
+  if (s.wait === 'speech' && synth) { s.after(() => { if (tourStep >= 0) tourTimer = setTimeout(step, 800); }); }
+  else { s.after?.(); tourTimer = setTimeout(step, 6500); }
+}
+function stopTour() {
+  if (tourStep < 0) return;
+  clearTimeout(tourTimer); tourStep = -1; showCaption(); $('tour').textContent = '▶ Guided tour';
+}
+$('tour').onclick = () => { if (tourStep >= 0) { stopSpeech(); return stopTour(); } $('tour').textContent = '■ Stop tour'; step(); };
+
+// ── Theme & boot ───────────────────────────────────────────────────────────────
+function applyTheme(v) {
+  if (v === 'auto') document.documentElement.removeAttribute('data-theme');
+  else document.documentElement.setAttribute('data-theme', v);
+  for (const o of $('theme').children) o.setAttribute('aria-pressed', String(o.dataset.v === v));
+  render();
+}
+for (const b of $('theme').children) b.onclick = () => applyTheme(b.dataset.v);
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => render());
+if (synth) synth.onvoiceschanged = () => {};   // voices load asynchronously in some browsers
+
+const params = new URLSearchParams(location.search);
+if (params.get('mit')) { state.mit = params.get('mit'); state.layers.diff = state.mit !== 'none'; }
+if (params.get('scenario')) state.scenario = params.get('scenario');
+if (params.has('paused')) { state.playing = false; $('play').textContent = '▶'; }
+buildStatic();
+applyTheme(params.get('theme') ?? 'auto');
+setTime(+(params.get('t') ?? state.t));
+requestAnimationFrame(tick);
+</script>
+</body>
+</html>

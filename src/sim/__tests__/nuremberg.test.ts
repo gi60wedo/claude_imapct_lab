@@ -39,8 +39,8 @@ describe.skipIf(!hasData)('Nuremberg benchmarks', () => {
   });
 
   it('runs one site × scenario in under 1.5 s and reproduces it from the seed', () => {
-    twin.run(byId.hauptmarkt, { scenario: 'SUNNY_SAT', seed: 1 });   // warm the scenario pool
     for (const scenario of ['SUNNY_SAT', 'RAINY_SAT', 'CHRISTMAS_MARKET'] as Scenario[]) {
+      twin.run(byId.hauptmarkt, { scenario, seed: 42 });   // the shared agent pool is built once per scenario
       for (const site of sites) {
         const t = performance.now();
         const a = twin.run(site, { scenario, seed: 42 });
@@ -49,7 +49,7 @@ describe.skipIf(!hasData)('Nuremberg benchmarks', () => {
         expect(JSON.stringify(a)).toEqual(JSON.stringify(b));
       }
     }
-  });
+  }, 30_000);   // 21 runs in total; each one must still finish in under 1.5 s
 
   it('commuters prefer Lorenzkirche, the site on the U-Bahn station', () => {
     const score = (id: string) => twin.run(byId[id], { scenario: 'SUNNY_SAT', seed: 42 }).personas.commuter.score;

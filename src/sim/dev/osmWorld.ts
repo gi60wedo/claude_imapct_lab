@@ -1,14 +1,15 @@
 // Dev-only: builds a World straight from datasets/ so B can run on real Nuremberg data before A's
 // prep/ outputs exist. A's graph.json should match these rules (or improve them, e.g. DGM1 slope).
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { haversineM } from '../geo';
-import type { GraphEdge, GraphNode, LngLat, PopulationCell, StationArrivals, Surface, World } from '../world';
+import type { GraphEdge, GraphNode, LngLat, PopulationCell, RoadCondition, StationArrivals, Surface, World } from '../world';
 
 export const REPO = resolve(import.meta.dirname, '../../..');
 const OSM_PATH = resolve(REPO, 'datasets/osm/altstadt.json');
 const ZENSUS_DIR = resolve(REPO, 'datasets/zensus');
 export const STATIONS_PATH = resolve(import.meta.dirname, 'data/stations.dev.json');
+export const ROAD_CONDITIONS_PATH = resolve(import.meta.dirname, 'data/road-conditions.dev.json');
 
 /** Altstadt bbox from datasets/README.md (WGS84). */
 export const BBOX = { minLat: 49.444, minLng: 11.065, maxLat: 49.461, maxLng: 11.092 };
@@ -64,10 +65,12 @@ function walkAllowed(t: Record<string, string>): boolean {
   return true;
 }
 
+const POOR = new Set(['bad', 'very_bad', 'horrible', 'very_horrible', 'impassable']);
+
 function surfaceOf(t: Record<string, string>): Surface {
   const s = t.surface ?? '';
   if (COBBLE.has(s)) return 'cobble';
-  if (ROUGH.has(s)) return 'rough';
+  if (ROUGH.has(s) || POOR.has(t.smoothness ?? '')) return 'rough';   // badly maintained paving counts as rough
   return 'smooth';
 }
 
@@ -152,6 +155,8 @@ export function buildOsmWorld(): World {
     if (t.highway === 'elevator') pois.elevators.push(p);
     if (e.type === 'node' && t.railway === 'tram_stop') pois.stops.push({ lng: p[0], lat: p[1], name: t.name ?? '', mode: 'tram' });
     if (e.type === 'node' && t.highway === 'bus_stop') pois.stops.push({ lng: p[0], lat: p[1], name: t.name ?? '', mode: 'bus' });
+    if (e.type === 'node' && t.railway === 'station' && t.train === 'yes') pois.stops.push({ lng: p[0], lat: p[1], name: t.name ?? '', mode: 'sbahn' });
+    if (e.type === 'node' && t.name === 'Zentraler Busbahnhof') pois.stops.push({ lng: p[0], lat: p[1], name: t.name, mode: 'bus' });
     if (t.shop) pois.shops.push(p);
     if (['attraction', 'museum', 'gallery', 'viewpoint', 'hotel', 'hostel', 'guest_house'].includes(t.tourism ?? '')) pois.attractions.push(p);
   }
@@ -172,7 +177,7 @@ export function buildOsmWorld(): World {
     return best ? [{ ...en, station: best.name }] : [];
   });
 
-  return { graph: { nodes, edges }, pois, population: loadZensus(), stations, christmasMarket };
+  return { graph: { nodes, edges }, pois, population: loadZensus(), stations, christmasMarket, roadConditions: loadRoadConditions() };
 }
 
 /** Vans enter where major roads cross the study-area boundary; one entry per 300 m cluster. */
@@ -193,6 +198,12 @@ function vanEntries(nodes: GraphNode[], edges: GraphEdge[]): LngLat[] {
 }
 
 export const normalizeStation = (name: string) => name.replace(/^Nürnberg\s+/, '').replace(/\s*\(.*\)$/, '').trim();
+
+/** Current roadworks researched from city and news sources (see the file's sources), if present. */
+function loadRoadConditions(): RoadCondition[] {
+  if (!existsSync(ROAD_CONDITIONS_PATH)) return [];
+  return (JSON.parse(readFileSync(ROAD_CONDITIONS_PATH, 'utf8')) as { items: RoadCondition[] }).items;
+}
 
 function loadStations(): StationArrivals[] {
   try {

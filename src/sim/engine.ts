@@ -37,6 +37,15 @@ export function describeMitigation(m: Mitigation): string {
   }
 }
 
+/** Walk nodes within ENTRY_RADIUS_M of the site polygon (local XY); the nearest walk node if none. */
+export function siteEntries(pw: PreparedWorld, poly: [number, number][]): number[] {
+  const [cx, cy] = centroid(poly);
+  const reach = Math.max(...poly.map(([x, y]) => Math.hypot(x - cx, y - cy)));
+  const entries = pw.g.nodesWithin(cx, cy, reach + P.ENTRY_RADIUS_M,
+    (i) => pw.isWalkNode(i) && distanceToPolygon(pw.g.x[i], pw.g.y[i], poly) <= P.ENTRY_RADIUS_M);
+  return entries.length ? entries : [pw.g.nearest(cx, cy, 400, pw.isWalkNode)].filter((i) => i >= 0);
+}
+
 export function simulate(pw: PreparedWorld, cand: Candidate, opts: SimOptions): SimulationResult {
   const { scenario, seed } = opts;
   const mitigations = opts.mitigations ?? [];
@@ -47,9 +56,12 @@ export function simulate(pw: PreparedWorld, cand: Candidate, opts: SimOptions): 
   const edges = pw.world.graph.edges;
   const pool = scenarioPool(pw, scenario, seed, scale);
   const ctx = scenarioContext(pw, scenario, mitigations);
-  const rng = fork(seed, `site:${cand.id}:${scenario}:${mitigations.map(describeMitigation).join('|')}`);
+  // Not keyed on mitigations: a fix must change results only through what it actually changes.
+  const rng = fork(seed, `site:${cand.id}:${scenario}`);
   const rain = scenario === 'RAINY_SAT';
+  const snow = scenario === 'SNOWY_SAT';
   const sheltered = cand.kind === 'ground_floor';
+  const outdoorDemand = sheltered ? 1 : rain ? P.RAIN_DEMAND_OUTDOOR : snow ? P.SNOW_DEMAND_OUTDOOR : 1;
 
   // ── Site geometry ────────────────────────────────────────────────────────────
   const poly = cand.polygon.map(([lng, lat]) => pw.proj.toXY(lng, lat));
@@ -63,9 +75,7 @@ export function simulate(pw: PreparedWorld, cand: Candidate, opts: SimOptions): 
   }
   const siteAvailable = slots.length > 0;
 
-  let entries = g.nodesWithin(cx, cy, reach + P.ENTRY_RADIUS_M,
-    (i) => pw.isWalkNode(i) && distPoly(g.x[i], g.y[i]) <= P.ENTRY_RADIUS_M);
-  if (entries.length === 0) entries = [g.nearest(cx, cy, 400, pw.isWalkNode)].filter((i) => i >= 0);
+  const entries = siteEntries(pw, poly);
 
   const spWalk = shortestPathsTo(g, entries, 'walker', ctx);
   const spSenior = shortestPathsTo(g, entries, 'senior', ctx);
@@ -145,6 +155,7 @@ export function simulate(pw: PreparedWorld, cand: Candidate, opts: SimOptions): 
     // §6: p_drop = max(0, (D_effective − 200) / 100 × 0.15), D_effective = senior route cost
     let pDrop = Math.min(1, Math.max(0, ((d - P.SENIOR_DROP_START_M) / 100) * P.SENIOR_DROP_PER_100M));
     if (rain && !sheltered && !kiosk) pDrop = 1 - (1 - pDrop) * (1 - P.SENIOR_RAIN_DROP);
+    if (snow && !sheltered && !kiosk) pDrop = 1 - (1 - pDrop) * (1 - P.SENIOR_SNOW_DROP);
     seniorExpected += 1 - pDrop;
     if (accessible) seniorAccessible += 1 - pDrop;
     if (r() < 1 - pDrop) {
@@ -164,7 +175,7 @@ export function simulate(pw: PreparedWorld, cand: Candidate, opts: SimOptions): 
     const budget = a.kind === 'resident' ? P.RESIDENT_BUDGET_M : P.TOURIST_BUDGET_M;
     const decay = a.kind === 'resident' ? 0.5 : 0.6;
     let p = siteAvailable && d <= budget ? 1 - (decay * d) / budget : 0;
-    if (rain && !sheltered) p *= P.RAIN_DEMAND_OUTDOOR;
+    p *= outdoorDemand;
     visitorExpected += p;
     const r = fork(seed, `${a.kind}:${cand.id}:${a.node}:${a.arriveAt}`);
     if (r() < p) {
@@ -216,7 +227,7 @@ export function simulate(pw: PreparedWorld, cand: Candidate, opts: SimOptions): 
     const hit = ps.nodes.find((i) => nearSite[i]);
     if (hit === undefined) continue;
     exposedPassers++;
-    if (siteAvailable && passerRng() < IMPULSE_SHARE(rain, sheltered)) {
+    if (siteAvailable && passerRng() < P.IMPULSE_VISIT_SHARE * outdoorDemand) {
       for (const s of chooseStalls(passerRng, slots, g.x[hit], g.y[hit], layout, 2)) slotVisits[s] += up;
     }
   }
@@ -253,7 +264,7 @@ export function simulate(pw: PreparedWorld, cand: Candidate, opts: SimOptions): 
   const seniorFriction = !siteAvailable ? 'Christkindlesmarkt occupies the site'
     : seniors.length && seniorNoAccess / seniors.length >= 0.3 && !transitWithinRadius
       ? `no step-free stop or elevator within ${P.SENIOR_TRANSIT_RADIUS_M} m (nearest ${Number.isFinite(transitLenM) ? Math.round(transitLenM) + ' m' : 'unreachable'})`
-      : topCobble(pw, seniorPathEdges) ?? (rain && !sheltered ? 'open square in the rain' : `${Math.round(transitLenM)} m step-free walk from the nearest stop`);
+      : topCobble(pw, seniorPathEdges) ?? (rain && !sheltered ? 'open square in the rain' : snow && !sheltered ? 'open square in the snow' : `${Math.round(transitLenM)} m step-free walk from the nearest stop`);
 
   const medianWalk = commuterWalks.length ? [...commuterWalks].sort((a, b) => a.min - b.min)[Math.floor(commuterWalks.length / 2)] : null;
 
@@ -284,9 +295,6 @@ export function simulate(pw: PreparedWorld, cand: Candidate, opts: SimOptions): 
   };
 }
 
-const IMPULSE_SHARE = (rain: boolean, sheltered: boolean) =>
-  P.IMPULSE_VISIT_SHARE * (rain && !sheltered ? P.RAIN_DEMAND_OUTDOOR : 1);
-
 const mean = (xs: number[]) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : 0);
 
 // ── Trips ──────────────────────────────────────────────────────────────────────
@@ -306,7 +314,8 @@ function walkTrip(pw: PreparedWorld, ctx: CostContext, nodes: number[], edges: n
   pushPoint(trip, pw.g.x[nodes[0]], pw.g.y[nodes[0]], t, -1);
   for (let i = 0; i < edges.length; i++) {
     const e = pw.world.graph.edges[edges[i]];
-    const speed = senior ? P.SENIOR_SPEED / (e.surface === 'cobble' ? P.SENIOR_COBBLE_SLOWDOWN : 1) : P.WALK_SPEED;
+    const base = senior ? P.SENIOR_SPEED / (e.surface === 'cobble' ? P.SENIOR_COBBLE_SLOWDOWN : 1) : P.WALK_SPEED;
+    const speed = ctx.snow && !e.sheltered ? base * P.SNOW_SPEED : base;
     t += (e.lengthM / speed) * (ctx.walkFactor?.[edges[i]] || 1);
     pushPoint(trip, pw.g.x[nodes[i + 1]], pw.g.y[nodes[i + 1]], t, edges[i]);
   }
@@ -590,7 +599,7 @@ const round6 = (x: number) => Math.round(x * 1e6) / 1e6;
 
 function walkability(pw: PreparedWorld, legs: number[][]) {
   const edges = pw.world.graph.edges;
-  let len = 0, cobble = 0, road = 0, slope = 0, steps = 0;
+  let len = 0, cobble = 0, road = 0, slope = 0, steps = 0, works = 0;
   for (const leg of legs) {
     for (const k of leg) {
       const e = edges[k];
@@ -599,11 +608,13 @@ function walkability(pw: PreparedWorld, legs: number[][]) {
       if (e.vehicle) road += e.lengthM;
       if (e.steps) steps++;
       slope += e.slope * e.lengthM;
+      if (pw.road.edgeCondition[k] >= 0) works += e.lengthM;
     }
   }
   if (len === 0) return { score: 0 };
   const stepsPerTrip = steps / Math.max(1, legs.length);
-  const score = 100 - 40 * (cobble / len) - 20 * Math.min(1, stepsPerTrip) - 500 * Math.max(0, slope / len - 0.02) - 20 * (road / len);
+  const score = 100 - 40 * (cobble / len) - 20 * Math.min(1, stepsPerTrip) - 500 * Math.max(0, slope / len - 0.02) - 20 * (road / len)
+    - P.WALKABILITY_ROADWORKS * (works / len);
   return { score: clamp(score) };
 }
 
