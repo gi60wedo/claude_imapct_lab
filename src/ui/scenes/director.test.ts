@@ -461,6 +461,32 @@ describe('mitigation gate', () => {
     expect(log.mock.calls.some(([m]) => /cached brief/.test(String(m)))).toBe(true);
   });
 
+  it('keeps the camera still across the gate when the rerun moves the hero', async () => {
+    // The rerun's Helga trip passes the same elevator but ends 300 m north instead of 200 m east.
+    const afterTrips = TRIPS.map((t) => (t.persona === 'senior' ? trip('senior', [[100, -300, 36000], [100, 0, 36300], [100, 300, 36600]]) : t));
+    const sim: SimClient = {
+      ...fakeSim().sim,
+      run: async (_c, scenario, mitigations) =>
+        mitigations.length ? { ...makeResult(scenario, mitigations, 64), trips: afterTrips } : makeResult(scenario, mitigations, 12),
+    };
+    // A linear move out of the gate keyframe starts from K2's end pose, the Helga follow-cam.
+    const def: SceneDef = { ...DEF, keyframes: DEF.keyframes.map((k) => (k.gate ? { ...k, transition: 'linear', transitionMs: 1000 } : k)) };
+    const d = createDirector({ def, sim, briefClient: okBrief, dataSource: 'fixtures', loadAssets: async () => ASSETS, log: vi.fn() });
+    await d.load();
+
+    const held = d.seek(9000).viewState;
+    const beforeEnd = offsetLngLat(tripPositionAt(TRIPS[2], 36600, true)!, 90, -60);
+    expect(haversineM([held.longitude, held.latitude], beforeEnd)).toBeLessThan(0.01);
+    await d.apply();
+    const resolved = d.seek(9000);
+    expect(resolved.scope?.heroes.helga).toEqual({ hero: 'helga', tripIndex: 2 });
+    expect(haversineM(tripPositionAt(afterTrips[2], 36600, true)!, tripPositionAt(TRIPS[2], 36600, true)!)).toBeGreaterThan(300);
+    expect(resolved.viewState).toEqual(held);
+    const centre = (v: SceneViewState): [number, number] => [v.longitude, v.latitude];
+    expect(haversineM(centre(d.seek(8999).viewState), centre(held))).toBeLessThan(1);
+    expect(haversineM(centre(d.seek(9010).viewState), centre(held))).toBeLessThan(5);
+  });
+
   it('shows an error and allows a retry when the rerun fails', async () => {
     const { sim } = fakeSim({ failRun: true });
     const d = createDirector({ def: DEF, sim, briefClient: okBrief, dataSource: 'fixtures', log: vi.fn() });

@@ -322,15 +322,19 @@ function contextAt(inputs: SceneInputs, tMs: SceneMs): ResultContext | null {
   return inputs.after && gate !== null && tMs >= gate ? inputs.after : inputs.before;
 }
 
-/** End pose of keyframe `k`, which is also the start pose of keyframe `k + 1`. */
+/**
+ * End pose of keyframe `k`, which is also the start pose of keyframe `k + 1`.
+ * It uses the result active within keyframe `k`. The gate starts a keyframe,
+ * so a keyframe ending at the gate keeps `before` and the camera does not jump
+ * when the rerun resolves.
+ */
 function endPose(inputs: SceneInputs, k: number): SceneViewState {
   let cache = endPoseCache.get(inputs);
   if (!cache) endPoseCache.set(inputs, (cache = new Map()));
   const hit = cache.get(k);
   if (hit) return hit;
   const kf = inputs.def.keyframes[k];
-  const tEnd = kf.t + kf.durationMs;
-  const pose = poseAt(inputs, k, tEnd, contextAt(inputs, tEnd));
+  const pose = poseAt(inputs, k, kf.t + kf.durationMs, contextAt(inputs, kf.t));
   cache.set(k, pose);
   return pose;
 }

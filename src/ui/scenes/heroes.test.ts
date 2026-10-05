@@ -16,6 +16,7 @@ import {
 import type { HeroRule, SceneAssets } from './types';
 
 type Trip = SimulationResult['trips'][number];
+type LngLatPoint = [number, number];
 
 const BASE: [number, number] = [11.08, 49.449];
 /** A point `east` and `north` metres from BASE. */
@@ -184,5 +185,113 @@ describe('hero rules', () => {
     const best = Math.min(...fixture.trips.filter((t) => t.persona === 'vendor').map(dist));
     expect(dist(fixture.trips[pick!.tripIndex])).toBe(best);
     expect(pickHero(rule, fixture, assets)).toEqual(pick);
+  });
+});
+
+/**
+ * Scene 2 rules on the committed Kaufhof fixture. No `graph.json` nodes are
+ * committed, so each test places elevator and loading nodes on points of the
+ * fixture's own trips. Every fixture trip starts at the same origin. The
+ * expected indices come from the fixture data and change only when it does.
+ */
+describe('hero rules on the Kaufhof RAINY_SAT fixture', () => {
+  const fixture = JSON.parse(
+    readFileSync(resolvePath(process.cwd(), 'public/data/fixtures/result-KAUFHOF-RAINY_SAT.json'), 'utf8'),
+  ) as SimulationResult;
+  const helga: HeroRule = { hero: 'helga', persona: 'senior', pick: 'earliestPassingNode', node: 'elevator', withinM: 5 };
+  const lukas: HeroRule = { hero: 'lukas', persona: 'commuter', pick: 'longestInWindow', window: [41400, 43200] };
+  const markus: HeroRule = { hero: 'markus', persona: 'vendor', pick: 'lastPointNearestNode', node: 'loading' };
+
+  const nodes = (role: string, ...points: LngLatPoint[]): SceneAssets => ({
+    arrivals: null,
+    graphNodes: points.map(([lng, lat], i) => ({ id: `${role}${i}`, lng, lat, role })),
+  });
+  const firstPoint = (i: number): LngLatPoint => [fixture.trips[i].path[0][0], fixture.trips[i].path[0][1]];
+  const lastPoint = (i: number): LngLatPoint => {
+    const p = fixture.trips[i].path[fixture.trips[i].path.length - 1];
+    return [p[0], p[1]];
+  };
+  const start = (i: number) => fixture.trips[i].path[0][2];
+  const withExtra = (i: number): SimulationResult => ({ ...fixture, trips: [...fixture.trips, fixture.trips[i]] });
+
+  it('picks Helga as the earliest-starting senior passing an elevator', () => {
+    // Every senior passes the shared origin. Trip 88 starts first, though trip 7 is the lowest senior index.
+    expect(pickHero(helga, fixture, nodes('elevator', firstPoint(88)))).toEqual({ hero: 'helga', tripIndex: 88 });
+    expect(start(88)).toBeLessThan(start(7));
+    // Seniors 65, 126 and 68 pass the end of trip 68. Trip 65 starts first.
+    expect(pickHero(helga, fixture, nodes('elevator', lastPoint(68)))).toEqual({ hero: 'helga', tripIndex: 65 });
+  });
+
+  it('applies withinM as an inclusive radius on the fixture paths', () => {
+    // Trip 88 passes 4.08 m from the end of trip 60; trip 64 runs through it and starts later.
+    const elevator = nodes('elevator', lastPoint(60));
+    expect(pickHero(helga, fixture, elevator)).toEqual({ hero: 'helga', tripIndex: 88 });
+    expect(pickHero({ ...helga, withinM: 4 }, fixture, elevator)).toEqual({ hero: 'helga', tripIndex: 64 });
+  });
+
+  it('breaks a Helga start-time tie by the lowest trip index', () => {
+    const twin = withExtra(65);
+    expect(pickHero(helga, twin, nodes('elevator', lastPoint(68)))).toEqual({ hero: 'helga', tripIndex: 65 });
+  });
+
+  it('leaves Helga null without an elevator node or with none in reach', () => {
+    expect(pickHero(helga, fixture, nodes('loading', lastPoint(68)))).toBeNull();
+    expect(pickHero(helga, fixture, nodes('elevator', [11.2, 49.5]))).toBeNull();
+  });
+
+  it('picks loading-point Markus as the vendor ending nearest a loading node', () => {
+    expect(pickHero(markus, fixture, nodes('loading', lastPoint(23)))).toEqual({ hero: 'markus', tripIndex: 23 });
+    expect(fixture.trips[23].persona).toBe('vendor');
+  });
+
+  it('breaks a loading-point tie by the lowest trip index', () => {
+    // Vendors 98 and 125 end on the same point.
+    expect(lastPoint(125)).toEqual(lastPoint(98));
+    expect(pickHero(markus, fixture, nodes('loading', lastPoint(125)))).toEqual({ hero: 'markus', tripIndex: 98 });
+    // With two loading nodes, vendors 23, 98 and 125 all end on one.
+    expect(pickHero(markus, fixture, nodes('loading', lastPoint(98), lastPoint(23)))).toEqual({ hero: 'markus', tripIndex: 23 });
+  });
+
+  it('leaves Markus null without a loading node or a matching bottleneck', () => {
+    expect(pickHero(markus, fixture, nodes('elevator', lastPoint(23)))).toBeNull();
+    expect(pickHero(markus, fixture, { arrivals: null, graphNodes: null })).toBeNull();
+    const scene1: HeroRule = {
+      hero: 'markus', persona: 'vendor', pick: 'lastPointNearestBottleneck', slice: '05:30_DELIVERY', type: 'BOLLARD_BLOCKAGE',
+    };
+    expect(fixture.bySlice['05:30_DELIVERY'].bottlenecks.some((b) => b.type === 'BOLLARD_BLOCKAGE')).toBe(false);
+    expect(pickHero(scene1, fixture, nodes('loading', lastPoint(23)))).toBeNull();
+  });
+
+  it('leaves Lukas null when no commuter starts in the 11:30 window', () => {
+    // The fixture's tSec runs from 0 and does not follow Q1, so no trip starts at 11:30.
+    const commuters = fixture.trips.filter((t) => t.persona === 'commuter');
+    expect(commuters.filter((t) => t.path[0][2] >= 41400 && t.path[0][2] <= 43200)).toEqual([]);
+    expect(pickHero(lukas, fixture, nodes('elevator'))).toBeNull();
+  });
+
+  it('breaks a Lukas duration tie by the lowest trip index', () => {
+    // Every fixture commuter trip lasts the same time.
+    const durations = new Set(fixture.trips.filter((t) => t.persona === 'commuter').map((t) => t.path[t.path.length - 1][2] - t.path[0][2]));
+    expect(durations.size).toBe(1);
+    // Commuters 2, 13, 19 and 40 start inside [200, 300].
+    expect(pickHero({ ...lukas, window: [200, 300] }, fixture, nodes('elevator'))).toEqual({ hero: 'lukas', tripIndex: 2 });
+    expect(pickHero({ ...lukas, window: [0, 3600] }, fixture, nodes('elevator'))).toEqual({ hero: 'lukas', tripIndex: 1 });
+  });
+
+  it('maps all three scene 2 heroes from one asset set', () => {
+    const assets2: SceneAssets = {
+      arrivals: null,
+      graphNodes: [
+        { id: 'e0', lng: lastPoint(68)[0], lat: lastPoint(68)[1], role: 'elevator' },
+        { id: 'l0', lng: lastPoint(125)[0], lat: lastPoint(125)[1], role: 'loading' },
+      ],
+    };
+    const rules = [helga, { ...lukas, window: [200, 300] } as HeroRule, markus];
+    expect(pickHeroes(rules, fixture, assets2)).toEqual({
+      markus: { hero: 'markus', tripIndex: 98 },
+      helga: { hero: 'helga', tripIndex: 65 },
+      lukas: { hero: 'lukas', tripIndex: 2 },
+    });
+    expect(pickHeroes(rules, fixture, assets2)).toEqual(pickHeroes(rules, fixture, assets2));
   });
 });
