@@ -1,0 +1,782 @@
+<!doctype html><html><head><meta charset='utf-8'><title>Role C Orchestration Plan</title><style>@page{size:A4;margin:14mm 12mm}body{font-family:'DejaVu Sans',Arial,sans-serif;font-size:9.5pt;line-height:1.4;color:#111}
+h1{font-size:18pt;border-bottom:2px solid #333}h2{font-size:13.5pt;margin-top:18px;border-bottom:1px solid #aaa;break-after:avoid}h3{font-size:11pt;break-after:avoid}
+table{border-collapse:collapse;width:100%;margin:6px 0;font-size:8.3pt}th,td{border:1px solid #bbb;padding:3px 5px;vertical-align:top}th{background:#eee}tr{break-inside:avoid}
+code{font-family:'DejaVu Sans Mono',monospace;font-size:8pt;background:#f3f3f3;overflow-wrap:anywhere}pre{background:#f5f5f5;border:1px solid #ddd;padding:6px;white-space:pre-wrap;font-size:7.6pt;break-inside:avoid}pre code{background:none}</style></head><body><h1>Role C · Map, Ranking &amp; Cockpit UI: Agent Orchestration Plan</h1>
+<p>UrbanTwin: Market-Sim · Claude Impact Lab #2 · Build window 13:00–20:00
+Owner: Mahesh (orchestrator) · Owns <code>src/ui/</code> and the pre-event scaffold
+Source of truth for scope, contract and gates: <code>IMPLEMENTATION_PLAN.md</code> (§1 tiers, §5 contract, §7 role C, §10 gates)</p>
+<p><strong>Done-check for role C (from §7):</strong> a weight change reorders the ranking in under 100 ms, and the map holds 60 fps with 100 trails.</p>
+<hr />
+<h2>0. Ground truth checked on this machine (2026-10-05)</h2>
+<table>
+<thead>
+<tr>
+<th>Item</th>
+<th>Finding</th>
+<th>Consequence for the plan</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Repo</td>
+<td><code>claude_imapct_lab</code> is its own Git repo on <code>main</code> (<code>dcac2bb</code>), remote <code>gi60wedo/claude_imapct_lab</code>. It has no <code>package.json</code>, no <code>src/</code>, no <code>public/</code>.</td>
+<td>The whole scaffold (C0) is still to do.</td>
+</tr>
+<tr>
+<td><code>.scratch/</code></td>
+<td>Not listed in <code>.git/info/exclude</code>.</td>
+<td>Add it before the first <code>ruddr run</code> so briefs and run state stay out of diffs.</td>
+</tr>
+<tr>
+<td><code>datasets/dop20/</code></td>
+<td>4 JPEG quadrants, each 4200 × 4200 px, 1050 m × 1050 m (0.25 m/px). The filename holds the bbox <code>minx_miny_maxx_maxy</code> in EPSG:25832. Total 12 MB.</td>
+<td>Downscale to 2100 px (0.5 m/px) for GPU memory. Convert the 4 corners of each quadrant to WGS84 and use the 4-corner <code>bounds</code> form of <code>BitmapLayer</code>. A UTM rectangle is slightly rotated in lng/lat (≈1.5° convergence at 11.08° E, zone 32 meridian is 9° E), so a 2-corner bbox would misalign by several metres at the edges.</td>
+</tr>
+<tr>
+<td><code>datasets/alkis/</code></td>
+<td>4 transparent PNG overlays with the same bbox naming.</td>
+<td>Optional overlay with the same corner transform.</td>
+</tr>
+<tr>
+<td><code>datasets/lod2/</code></td>
+<td>4 CityGML tiles, 525 MB total, <code>bldg:measuredHeight</code> present, ~6,760 buildings in one tile, CRS ETRS89/UTM32.</td>
+<td>The browser cannot load this. Somebody must convert it to a small <code>buildings.json</code> (footprint + height).</td>
+</tr>
+<tr>
+<td><code>datasets/osm/altstadt.json</code></td>
+<td>Overpass JSON (<code>elements[]</code> with inline <code>geometry</code>): 3,908 building ways (2,013 with <code>building:levels</code>, 182 with <code>height</code>), 224 bollards, 4,148 highway features.</td>
+<td>Fallback for 3D buildings: OSM footprints, height = <code>height</code> or <code>building:levels × 3 m</code> or 9 m. Bollard markers come straight from OSM nodes.</td>
+</tr>
+<tr>
+<td>Node / tools</td>
+<td><code>node v26.4.0</code>, <code>npx</code>, <code>bun</code>; no <code>pnpm</code>. Playwright browsers cached in <code>~/.cache/ms-playwright</code> (<code>chromium-1243</code>), but the <code>playwright</code> package is not installed in this repo.</td>
+<td>Use <code>npm</code>. Add <code>@playwright/test</code> as a dev dependency in C0.</td>
+</tr>
+<tr>
+<td><code>codex</code></td>
+<td><code>codex-cli 0.160.0</code>. <code>~/.codex/config.toml</code>: <code>model = "gpt-6.1-sol"</code>, <code>model_reasoning_effort = "medium"</code>, <code>sandbox_mode = "danger-full-access"</code>, <code>approval_policy = "never"</code>.</td>
+<td>Codex defaults to full access with no approvals. Always pass a sandbox explicitly.</td>
+</tr>
+<tr>
+<td><code>claude</code></td>
+<td><code>2.1.289 (Claude Code)</code>.</td>
+<td>Headless mode works with <code>-p</code>, <code>--model</code>, <code>--effort</code>, <code>--permission-mode</code>, <code>--max-budget-usd</code>, <code>-w/--worktree</code>.</td>
+</tr>
+<tr>
+<td><code>ruddr</code></td>
+<td><code>ruddr 0.6.3</code>, skill at <code>~/.claude/skills/ruddr-delegate/SKILL.md</code>. Model catalog (<code>ruddr models --json</code>): Codex <code>gpt-6.1-sol</code> (efforts low…ultra), <code>gpt-6-luna</code>, others; Claude <code>claude-opus-5-5</code> (default), <code>claude-fable-5-1</code>, <code>claude-haiku-4-5-20251001</code>, <code>claude-sonnet-5</code>. <strong><code>claude-sonnet-5-5</code> is not in the Ruddr catalog</strong>, and the catalog lists no efforts for Claude models.</td>
+<td>Run <code>ruddr models add claude claude-sonnet-5-5 --label "Claude Sonnet 5.5"</code> once before the event, then confirm with <code>ruddr models --json</code>. If a Claude <code>--effort</code> is rejected by Ruddr, drop the flag or launch that agent with <code>claude -p</code> instead.</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2>1. Design choices that keep the task tree small</h2>
+<ol>
+<li><strong>One store, three adapters, one layout file. Mahesh writes these by hand.</strong> They are about 120 lines total and they are the only files that every subtask touches. Agents may import them and may not edit them.</li>
+<li><code>src/ui/state/store.ts</code>: a tiny <code>useSyncExternalStore</code> store (no new dependency). It holds <code>candidates</code>, <code>results: Record&lt;candidateId, SimulationResult&gt;</code>, <code>weights</code>, <code>scenario</code>, <code>slice</code>, <code>selectedId</code>, <code>brief</code>, <code>playing</code>, <code>timeSec</code>.</li>
+<li><code>src/ui/adapters/types.ts</code>: <code>SimClient { run(candidateId, scenario, mitigations, seed): Promise&lt;SimulationResult&gt; }</code> and <code>BriefClient { brief(input): Promise&lt;Brief&gt; }</code>.</li>
+<li><code>src/ui/adapters/fixtures.ts</code>: both clients backed by <code>public/data/mock-*.json</code>.</li>
+<li><code>src/ui/App.tsx</code>: a CSS grid with four named slots (<code>map</code>, <code>ranking</code>, <code>whatif</code>, <code>cockpit</code>).</li>
+<li><strong>The UI never computes a criterion.</strong> It reads <code>SimulationResult.criteria</code> and computes only the weighted sum with the active weights. Until D's <code>src/score/</code> exports a function, C uses a 10-line <code>weightedScore()</code> in <code>src/ui/ranking/applyWeights.ts</code> and swaps the import at 17:00.</li>
+<li><strong>Base map without vector tiles.</strong> The DOP20 bitmap is the base. MapLibre runs with an empty style (<code>{version: 8, sources: {}, layers: [{id:'bg', type:'background', paint:{'background-color':'#111'}}]}</code>) and deck.gl draws on top through <code>@deck.gl/mapbox</code> <code>MapboxOverlay</code> in interleaved mode. The demo then works offline.</li>
+<li><strong>Static C assets live in <code>public/base/</code>, owned by C.</strong> A owns <code>public/data/</code>. C never writes there except for the fixtures committed jointly at 13:20.</li>
+<li><strong>One deck.gl version.</strong> All <code>@deck.gl/*</code> packages are pinned to the same exact version in <code>package.json</code>, with no caret.</li>
+</ol>
+<hr />
+<h2>2. Task tree</h2>
+<p>Tier tags follow §1 of the master plan: <strong>M</strong> = Must, <strong>S</strong> = Should, <strong>X</strong> = Stretch (skipped unless all M and S items are merged by 16:30).</p>
+<h3>2.1 Pre-event (before 13:00)</h3>
+<table>
+<thead>
+<tr>
+<th>ID</th>
+<th>Tier</th>
+<th>Subtask</th>
+<th>Files</th>
+<th>Depends on</th>
+<th>Done-condition (orchestrator runs it)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>C0</strong></td>
+<td>M</td>
+<td>Repo scaffold: Vite + React + TS, Tailwind, deck.gl + MapLibre, Vitest, Playwright, ESLint off. <code>src/contracts.ts</code> with the §5 types pasted as a <em>draft</em> (freeze at 13:20). Empty folders <code>src/rank/ src/sim/ src/score/ server/</code> with <code>.gitkeep</code>. <code>npm run dev</code>, <code>build</code>, <code>test</code>, <code>e2e</code> scripts.</td>
+<td><code>package.json</code>, <code>package-lock.json</code>, <code>vite.config.ts</code>, <code>tsconfig*.json</code>, <code>index.html</code>, <code>src/main.tsx</code>, <code>src/index.css</code>, <code>src/contracts.ts</code>, <code>playwright.config.ts</code>, <code>.gitignore</code></td>
+<td>none</td>
+<td><code>npm ci &amp;&amp; npm run build &amp;&amp; npm test -- --run &amp;&amp; npx tsc --noEmit -p tsconfig.app.json</code> all exit 0; <code>npm ls @deck.gl/core</code> prints exactly one version; <code>git grep -nE 'sk-ant|ANTHROPIC_API_KEY=' -- . ':!*.md'</code> prints nothing.</td>
+</tr>
+<tr>
+<td><strong>C1</strong></td>
+<td>M</td>
+<td>Base assets: script converts the 4 DOP20 quadrants to 2100 px JPEGs plus <code>public/base/dop20.json</code> (<code>[{url, bounds:[[lng,lat]×4]}]</code>, corners in order bottom-left, top-left, top-right, bottom-right). Same for ALKIS PNGs. Fallback <code>public/base/buildings-osm.json</code> from OSM building ways.</td>
+<td><code>tools/base_assets.py</code>, <code>public/base/*</code></td>
+<td>C0</td>
+<td><code>uv run --with pyproj --with pillow python tools/base_assets.py</code> exits 0; <code>public/base/</code> &lt; 15 MB; a Python check confirms Lorenzkirche <code>11.07773, 49.45095</code> falls inside exactly one quadrant's corner polygon; building count ≥ 3,000.</td>
+</tr>
+<tr>
+<td><strong>C2</strong></td>
+<td>M</td>
+<td>UI fixtures that match §5 exactly: 18 candidates (3 benchmarks, ≥ 5 rejected with <code>rejectReason</code>), 3 <code>SimulationResult</code>s × <code>SUNNY_SAT</code>/<code>RAINY_SAT</code>, ≥ 100 trips along real OSM footways, 1 <code>Brief</code>. A Vitest file type-checks every fixture against <code>contracts.ts</code>.</td>
+<td><code>src/ui/__fixtures__/gen.ts</code>, <code>src/ui/__fixtures__/*.json</code>, <code>src/ui/__fixtures__/fixtures.test.ts</code></td>
+<td>C0, C1</td>
+<td><code>npm test -- --run src/ui/__fixtures__</code> passes; <code>npx tsc --noEmit</code> passes with <code>resolveJsonModule</code>; trip count ≥ 100 per result. These become <code>public/data/mock-*.json</code> at 13:20 if B and D have nothing better.</td>
+</tr>
+<tr>
+<td><strong>C3a</strong></td>
+<td>M</td>
+<td>Orchestrator files from §1.1 (store, adapters, App layout).</td>
+<td><code>src/ui/state/store.ts</code>, <code>src/ui/adapters/*</code>, <code>src/ui/App.tsx</code></td>
+<td>C0</td>
+<td>Mahesh writes them. <code>npm run build</code> passes.</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Pre-event agent ask to A:</strong> <code>public/data/buildings.json</code> = <code>[{polygon:[[lng,lat]…], h:number}]</code> from LoD2 <code>measuredHeight</code>. If it is not committed by 13:00, C uses <code>public/base/buildings-osm.json</code> and swaps later by changing one URL.</p>
+<h3>2.2 13:00–15:00 (gate 15:00: "UI shows fixtures end to end")</h3>
+<table>
+<thead>
+<tr>
+<th>ID</th>
+<th>Tier</th>
+<th>Subtask</th>
+<th>Files</th>
+<th>Depends on</th>
+<th>Done-condition</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>C4</strong></td>
+<td>M</td>
+<td>Map shell and static layers: MapLibre + <code>MapboxOverlay</code>, DOP20 <code>BitmapLayer</code>s, extruded buildings (<code>SolidPolygonLayer</code> or <code>PolygonLayer</code> with <code>extruded</code>), candidate polygons colored by rank, rejected ones grey with a tooltip that shows <code>rejectReason</code>, click selects a candidate. Bollards from OSM as <code>ScatterplotLayer</code>. Attribution line from §3.</td>
+<td><code>src/ui/map/**</code></td>
+<td>C0–C3a</td>
+<td><code>npm run e2e -- map.spec.ts</code> passes: canvas visible, no console errors, tooltip with the reject reason appears on hover of a rejected candidate; screenshot <code>e2e/__shots__/map.png</code> saved and inspected by Mahesh (aerial photo aligns with building extrusions at Lorenzkirche).</td>
+</tr>
+<tr>
+<td><strong>C5</strong></td>
+<td>M + S</td>
+<td>Ranking panel: MarketScore bars sorted by weighted score, 5 weight sliders with live renormalization (sum = 1), 3 presets from §6, guard badge "fails a stakeholder group" when any persona &lt; 40, rejected list collapsed below.</td>
+<td><code>src/ui/ranking/**</code></td>
+<td>C3a</td>
+<td>Vitest: <code>applyWeights</code> renormalizes and reorders on preset change, guard flag fires below 40. Playwright <code>ranking.spec.ts</code>: sets the accessibility slider, measures <code>performance.now()</code> from <code>input</code> to the DOM order change via <code>MutationObserver</code>, median of 20 changes &lt; 100 ms.</td>
+</tr>
+<tr>
+<td><strong>C6</strong></td>
+<td>M</td>
+<td>Cockpit: consensus dial (min and mean of persona scores), 4 persona cards (score, <code>topFriction</code> chip, <code>verdict</code>), brief panel rendering <code>why</code>, <code>comparisons</code>, <code>losers</code>, buttons <strong>Apply Claude mitigation</strong> (calls <code>SimClient.run</code> with <code>losers[*].mitigation</code>) and <strong>Export council brief</strong> (downloads <code>councilBriefMd</code> as <code>.md</code>).</td>
+<td><code>src/ui/cockpit/**</code></td>
+<td>C3a</td>
+<td>Playwright <code>cockpit.spec.ts</code>: 4 cards render the fixture scores verbatim; clicking Export yields a download whose text equals <code>brief.councilBriefMd</code>; clicking Apply calls the adapter once (spy) and re-renders the cards.</td>
+</tr>
+</tbody>
+</table>
+<h3>2.3 15:00–16:30 (dynamics)</h3>
+<table>
+<thead>
+<tr>
+<th>ID</th>
+<th>Tier</th>
+<th>Subtask</th>
+<th>Files</th>
+<th>Depends on</th>
+<th>Done-condition</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>C7</strong></td>
+<td>M + S</td>
+<td>Simulation layers: <code>TripsLayer</code> with persona colours (senior purple, vendor orange, commuter blue, retailer grey), <code>HeatmapLayer</code> from <code>bySlice[slice].heat</code>, bottleneck markers sized by <code>severity</code>, kiosk markers when <code>mitigations</code> is non-empty. Time-slice slider (05:30 / 11:30 / 15:00) and play/pause driving <code>timeSec</code> through one <code>requestAnimationFrame</code> loop. In-app FPS probe on <code>window.__fps</code> when the URL has <code>?perf=1</code>.</td>
+<td><code>src/ui/map/simLayers.ts</code>, <code>src/ui/controls/**</code>, <code>src/ui/perf/fps.ts</code></td>
+<td>C4</td>
+<td><code>perf.spec.ts</code> run <strong>headed</strong> on the demo laptop: <code>?perf=1</code> with 100 trails playing, median of <code>window.__fps</code> over 10 s ≥ 55, 3 runs out of 3. Screenshot <code>e2e/__shots__/trails.png</code> shows trails and heatmap.</td>
+</tr>
+<tr>
+<td><strong>C8</strong></td>
+<td>M + S</td>
+<td>What-if bar: Sunny / Rainy / Christmas market buttons that call <code>SimClient.run</code> for the shortlist and show a spinner; side-by-side compare of two selected candidates (S).</td>
+<td><code>src/ui/whatif/**</code>, <code>src/ui/compare/**</code></td>
+<td>C3a, C5</td>
+<td>Playwright <code>whatif.spec.ts</code>: clicking Rainy loads <code>RAINY_SAT</code> fixtures and changes at least one bar value; compare view shows both candidates' 5 criteria.</td>
+</tr>
+<tr>
+<td><strong>C9</strong></td>
+<td>X</td>
+<td>Draw a custom site (<code>EditableGeoJsonLayer</code> is out; use 4 clicks → polygon).</td>
+<td><code>src/ui/draw/**</code></td>
+<td>all M</td>
+<td>Only started if C4–C8 are merged by 16:30.</td>
+</tr>
+</tbody>
+</table>
+<h3>2.4 17:00–18:00 (integration, freeze 18:00)</h3>
+<table>
+<thead>
+<tr>
+<th>ID</th>
+<th>Tier</th>
+<th>Subtask</th>
+<th>Files</th>
+<th>Depends on</th>
+<th>Done-condition</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>C10</strong></td>
+<td>M</td>
+<td>Swap adapters: <code>adapters/worker.ts</code> wraps B's Web Worker; <code>adapters/http.ts</code> POSTs to <code>/api/brief</code>; import D's MarketScore in place of <code>applyWeights</code>. Feature flag <code>?data=fixtures</code> keeps the fixture path alive.</td>
+<td><code>src/ui/adapters/**</code>, one import line in <code>src/ui/ranking/applyWeights.ts</code></td>
+<td>C4–C8, B worker, D route</td>
+<td>Full demo path (§11 pitch order) runs 3 times in a row in <code>demo.spec.ts</code> with real adapters; <code>?data=fixtures</code> still passes all specs.</td>
+</tr>
+<tr>
+<td><strong>C11</strong></td>
+<td>M</td>
+<td>Projector polish: contrast, font size ≥ 16 px, persona colours readable on the aerial photo.</td>
+<td><code>src/index.css</code>, <code>src/ui/**</code> styles</td>
+<td>C10</td>
+<td>Mahesh checks on the projector at 18:00.</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2>3. Agent assignment</h2>
+<p>Provider facts used below come from <code>ruddr models --json</code> and the CLI help on this machine.</p>
+<table>
+<thead>
+<tr>
+<th>ID</th>
+<th>Agent</th>
+<th>Model</th>
+<th>Effort</th>
+<th>Why</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>C0</td>
+<td>Codex</td>
+<td><code>gpt-6.1-sol</code></td>
+<td>medium</td>
+<td>Well-specified tooling work with a crisp command-based done-check. Codex handles package and config setup reliably.</td>
+</tr>
+<tr>
+<td>C1</td>
+<td>Claude</td>
+<td><code>claude-sonnet-5-5</code></td>
+<td>medium</td>
+<td>Short Python script with a geodesy detail (corner order, rotation). Sonnet handles it cheaply; the done-check catches a wrong transform.</td>
+</tr>
+<tr>
+<td>C2</td>
+<td>Claude</td>
+<td><code>claude-haiku-4-5-20251001</code></td>
+<td>(none)</td>
+<td>Mechanical fixture generation against a fixed type. Cheapest model is enough; <code>tsc</code> catches drift.</td>
+</tr>
+<tr>
+<td>C3a</td>
+<td>Mahesh</td>
+<td>—</td>
+<td>—</td>
+<td>Shared files. Hand-written so no agent owns them.</td>
+</tr>
+<tr>
+<td>C4</td>
+<td>Claude</td>
+<td><code>claude-opus-5-5</code></td>
+<td>high</td>
+<td>deck.gl layer design, MapLibre interleaving and coordinate alignment carry the most architecture risk in role C.</td>
+</tr>
+<tr>
+<td>C5</td>
+<td>Codex</td>
+<td><code>gpt-6.1-sol</code></td>
+<td>high</td>
+<td>Self-contained component with a hard perf target and a measurable test.</td>
+</tr>
+<tr>
+<td>C6</td>
+<td>Claude</td>
+<td><code>claude-sonnet-5-5</code></td>
+<td>medium</td>
+<td>Standard React components rendering given data.</td>
+</tr>
+<tr>
+<td>C7</td>
+<td>Codex</td>
+<td><code>gpt-6.1-sol</code></td>
+<td>high</td>
+<td>Performance-critical animation loop and layer tuning against an fps number.</td>
+</tr>
+<tr>
+<td>C8</td>
+<td>Claude</td>
+<td><code>claude-sonnet-5-5</code></td>
+<td>medium</td>
+<td>Small UI with adapter calls.</td>
+</tr>
+<tr>
+<td>C9</td>
+<td>Claude</td>
+<td><code>claude-sonnet-5-5</code></td>
+<td>medium</td>
+<td>Only if time remains.</td>
+</tr>
+<tr>
+<td>C10</td>
+<td>Mahesh + Claude interactive</td>
+<td><code>claude-opus-5-5</code></td>
+<td>high</td>
+<td>Integration debugging across A/B/D code needs a human in the loop. Run interactively, not as a swarm job.</td>
+</tr>
+<tr>
+<td>C11</td>
+<td>Mahesh</td>
+<td>—</td>
+<td>—</td>
+<td>Visual judgement on real hardware.</td>
+</tr>
+<tr>
+<td>Review of Codex branches</td>
+<td>Claude</td>
+<td><code>claude-sonnet-5-5</code></td>
+<td>medium</td>
+<td>Other-vendor review, read-only (<code>--permission-mode plan</code>).</td>
+</tr>
+<tr>
+<td>Review of Claude branches</td>
+<td>Codex</td>
+<td><code>gpt-6.1-sol</code> (config default)</td>
+<td>medium</td>
+<td><code>codex review --base c/ui</code>.</td>
+</tr>
+</tbody>
+</table>
+<p>Fable 5.1 (<code>claude-fable-5-1</code>) is not assigned. It stays as a spare vendor-internal fallback when Opus stalls on C4 or C10.</p>
+<hr />
+<h2>4. Parallel schedule, worktrees and ownership</h2>
+<p>Worktrees sit next to the repo so <code>npm</code> installs do not collide. Each one needs its own <code>npm ci</code> (about 1 minute; run it in the background).</p>
+<table>
+<thead>
+<tr>
+<th>Window</th>
+<th>Parallel agents</th>
+<th>Worktree (<code>../ut-&lt;id&gt;</code>) and branch</th>
+<th>Owns (may write)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Pre-event, step 1</td>
+<td>C0 alone</td>
+<td><code>../ut-c0</code> · <code>c/c0-scaffold</code></td>
+<td>root config files, <code>src/contracts.ts</code>, <code>src/main.tsx</code>, <code>src/index.css</code></td>
+</tr>
+<tr>
+<td>Pre-event, step 2</td>
+<td>C1 ∥ C2 (C2 starts with OSM, reads C1 output when ready)</td>
+<td><code>../ut-c1</code> · <code>c/c1-base</code>; <code>../ut-c2</code> · <code>c/c2-fixtures</code></td>
+<td>C1: <code>tools/</code>, <code>public/base/</code>. C2: <code>src/ui/__fixtures__/</code></td>
+</tr>
+<tr>
+<td>13:30–15:00</td>
+<td>C4 ∥ C5 ∥ C6</td>
+<td><code>../ut-c4</code> · <code>c/c4-map</code>; <code>../ut-c5</code> · <code>c/c5-ranking</code>; <code>../ut-c6</code> · <code>c/c6-cockpit</code></td>
+<td>C4: <code>src/ui/map/</code>, <code>e2e/map.spec.ts</code>. C5: <code>src/ui/ranking/</code>, <code>e2e/ranking.spec.ts</code>. C6: <code>src/ui/cockpit/</code>, <code>e2e/cockpit.spec.ts</code></td>
+</tr>
+<tr>
+<td>15:00–16:30</td>
+<td>C7 ∥ C8</td>
+<td><code>../ut-c7</code> · <code>c/c7-sim</code>; <code>../ut-c8</code> · <code>c/c8-whatif</code></td>
+<td>C7: <code>src/ui/map/simLayers.ts</code>, <code>src/ui/controls/</code>, <code>src/ui/perf/</code>, <code>e2e/perf.spec.ts</code>. C8: <code>src/ui/whatif/</code>, <code>src/ui/compare/</code>, <code>e2e/whatif.spec.ts</code></td>
+</tr>
+<tr>
+<td>17:00–18:00</td>
+<td>C10 (interactive)</td>
+<td>main checkout · <code>c/c10-integrate</code></td>
+<td><code>src/ui/adapters/</code></td>
+</tr>
+</tbody>
+</table>
+<p><strong>Read-only for every agent:</strong> <code>src/contracts.ts</code>, <code>src/ui/state/store.ts</code>, <code>src/ui/adapters/types.ts</code>, <code>src/ui/App.tsx</code>, <code>package.json</code>, <code>package-lock.json</code>, <code>tailwind</code>/theme tokens in <code>src/index.css</code>, everything outside <code>src/ui/</code>. If an agent needs a new dependency or store field, it writes <code>// TODO(subagent): need X</code> and stops that part. Mahesh adds it on <code>main</code> and tells the agent to rebase with <code>ruddr steer</code>.</p>
+<p><strong>Mounting:</strong> each component exports one default component (<code>&lt;MapView/&gt;</code>, <code>&lt;RankingPanel/&gt;</code>, <code>&lt;Cockpit/&gt;</code>, <code>&lt;WhatIfBar/&gt;</code>). <code>App.tsx</code> already imports all four from day one with stub files committed in C3a, so merges never touch <code>App.tsx</code>.</p>
+<p><strong>Merge order and who merges:</strong> Mahesh merges C branches into his integration branch <code>c/ui</code> in the order C0 → C1 → C2 → C3a → C5 → C6 → C4 → C8 → C7 (cheapest-to-verify first, map last because it is the slowest to review). After each merge he runs <code>npm ci &amp;&amp; npm run build &amp;&amp; npm test -- --run &amp;&amp; npm run e2e</code>. D merges <code>c/ui</code> into <code>main</code> (§12 of the master plan) at 15:00 and at 17:00.</p>
+<hr />
+<h2>5. Prompts</h2>
+<h3>5.1 Shared preamble (prepend to every brief)</h3>
+<pre><code class="language-text">Project: UrbanTwin Market-Sim, a Vite + React + TypeScript app with deck.gl over MapLibre.
+You work in a git worktree on branch {BRANCH}. Other agents edit other folders of the same project
+at the same time. Read IMPLEMENTATION_PLAN.md §5 (data contract) and §7 role C before editing.
+
+Contract rules:
+- Import types only from src/contracts.ts. Do not add, rename or make optional any field.
+  If you need data the contract lacks, write `// TODO(subagent): contract needs &lt;field&gt;` and work around it.
+- Never hard-code a score, percentage or criterion value in UI code. Render values from the data.
+- Read app state only through src/ui/state/store.ts and data only through src/ui/adapters/types.ts.
+
+Scope fence: you may create or edit files ONLY under {ALLOWED}. Do not modify files outside {ALLOWED}.
+Do not edit package.json, package-lock.json, src/contracts.ts, src/ui/App.tsx, src/ui/state/*,
+src/ui/adapters/*, src/index.css. Do not add dependencies. Do not touch .scratch/ (controller files).
+
+Styling: Tailwind utility classes only, using the existing tokens in src/index.css
+(dark theme, persona colours senior #8b5cf6, vendor #f97316, commuter #3b82f6, retailer #9ca3af).
+No new CSS files, no other UI library.
+
+Secrets: never read, print or write .env or any API key. No network calls except to localhost.
+
+Commit policy: leave all changes uncommitted. The orchestrator reviews and commits.
+Dependencies are already installed (npm ci ran). The sandbox may block network; that is expected.
+</code></pre>
+<h3>5.2 Task blocks (append to the preamble, then append the Ruddr handoff block verbatim)</h3>
+<p><strong>C0 · scaffold (Codex).</strong> <code>{ALLOWED}</code> = repo root config files, <code>src/main.tsx</code>, <code>src/index.css</code>, <code>src/contracts.ts</code>, <code>src/ui/</code>, <code>e2e/</code>, empty <code>.gitkeep</code> folders. This brief overrides the preamble's ban on <code>package.json</code>.</p>
+<pre><code class="language-text">Goal: scaffold the app. Use npm (no pnpm). Vite + React + TS, Tailwind, Vitest (jsdom), @playwright/test,
+maplibre-gl, deck.gl packages @deck.gl/core @deck.gl/layers @deck.gl/geo-layers @deck.gl/aggregation-layers
+@deck.gl/mapbox @deck.gl/react, all pinned to ONE exact identical version (no ^ or ~).
+Paste the TypeScript block from IMPLEMENTATION_PLAN.md §5 into src/contracts.ts verbatim with a header
+comment &quot;DRAFT until 13:20 freeze&quot;. Create src/rank src/sim src/score server with .gitkeep.
+Scripts: dev, build (tsc -b &amp;&amp; vite build), test (vitest), e2e (playwright test).
+Playwright config: baseURL http://localhost:5173, webServer = npm run dev, chromium only.
+src/index.css: Tailwind import plus CSS variables for the dark theme and the four persona colours listed above.
+Done-check (run all): npm ci; npm run build; npm test -- --run; npm ls @deck.gl/core (exactly one version).
+</code></pre>
+<p><strong>C1 · base assets (Claude Sonnet).</strong> <code>{ALLOWED}</code> = <code>tools/</code>, <code>public/base/</code>.</p>
+<pre><code class="language-text">Goal: tools/base_assets.py produces browser assets from datasets/.
+1. For each datasets/dop20/*.jpg and datasets/alkis/*.png: parse minx_miny_maxx_maxy (EPSG:25832) from the name,
+   resize to 2100x2100 (JPEG q=80 / PNG), write to public/base/, and convert the 4 corners with
+   pyproj Transformer.from_crs(25832, 4326, always_xy=True).
+   Write public/base/dop20.json and alkis.json as [{url, bounds: [[lng,lat] BL, TL, TR, BR]}].
+2. From datasets/osm/altstadt.json, building ways -&gt; public/base/buildings-osm.json as
+   [{polygon: [[lng,lat],...], h}] with h = tags.height, else building:levels*3, else 9. Round coords to 6 dp.
+Done-check: uv run --with pyproj --with pillow python tools/base_assets.py; du -sh public/base (&lt; 15 MB);
+add tools/check_base.py that asserts 11.07773,49.45095 lies inside exactly one dop20 quadrant and
+that buildings count &gt;= 3000; run it.
+</code></pre>
+<p><strong>C2 · fixtures (Claude Haiku).</strong> <code>{ALLOWED}</code> = <code>src/ui/__fixtures__/</code>.</p>
+<pre><code class="language-text">Goal: realistic fixtures that type-check against src/contracts.ts.
+Write src/ui/__fixtures__/gen.ts (run with npx tsx or bun) that reads datasets/osm/altstadt.json and writes:
+- candidates.json: 18 Candidate objects. Include the 3 benchmarks (kind 'benchmark': Hauptmarkt 49.45393,11.07744;
+  Lorenzkirche 49.45095,11.07773; Kaufhof ~49.4490,11.0800). At least 5 have passedFilter=false with a rejectReason
+  (&quot;area &lt; 800 m²&quot;, &quot;no stop within 400 m&quot;, &quot;no van route within 80 m&quot;). Polygons are small quads around real OSM squares.
+- result-&lt;id&gt;-&lt;scenario&gt;.json for 3 shortlist ids x SUNNY_SAT, RAINY_SAT: SimulationResult with all 3 TimeSlices,
+  &gt;= 100 trips whose paths follow OSM footway/pedestrian way geometry with increasing tSec, heat points, bottlenecks.
+  Values are deterministic from a seeded RNG (mulberry32, seed 42). Label the file header &quot;FIXTURE - not engine output&quot;.
+- brief.json: one Brief.
+Write fixtures.test.ts that imports every JSON with the contract types (satisfies) and asserts trips.length &gt;= 100.
+Done-check: npm test -- --run src/ui/__fixtures__ ; npx tsc --noEmit.
+</code></pre>
+<p><strong>C4 · map (Claude Opus).</strong> <code>{ALLOWED}</code> = <code>src/ui/map/</code>, <code>e2e/map.spec.ts</code>.</p>
+<pre><code class="language-text">Goal: src/ui/map/MapView.tsx (default export) renders MapLibre with an empty background style and
+deck.gl via @deck.gl/mapbox MapboxOverlay ({interleaved: true}). Initial view 49.4525,11.0775 zoom 16 pitch 50.
+Layers (one file per layer factory under src/ui/map/layers/): BitmapLayer per entry in /base/dop20.json using its
+4-corner bounds; extruded buildings from /data/buildings.json, falling back to /base/buildings-osm.json on 404;
+candidate PolygonLayer coloured by rank from the store (rejected = grey 40% alpha, pickable, tooltip shows name and
+rejectReason); bollards ScatterplotLayer from OSM barrier=bollard nodes (precompute once, keep in memory).
+Click on a candidate sets selectedId via the store. Show the attribution text from IMPLEMENTATION_PLAN.md §3.
+Memoize layers on their data so a weight change does not rebuild static layers.
+Done-check: npm run build; npm run e2e -- map.spec.ts (spec: no console errors, canvas present, hover a rejected
+candidate shows the reason, saves e2e/__shots__/map.png).
+</code></pre>
+<p><strong>C5 · ranking (Codex).</strong> <code>{ALLOWED}</code> = <code>src/ui/ranking/</code>, <code>e2e/ranking.spec.ts</code>.</p>
+<pre><code class="language-text">Goal: src/ui/ranking/RankingPanel.tsx (default export) and applyWeights.ts.
+applyWeights(criteria: Weights, w: Weights) returns the weighted sum; normalize(w) renormalizes to sum 1.
+Bars sorted by score from store.results[*].criteria and store.weights; 5 sliders (accessibility, footfall, fairness,
+localBusiness, walkability) and 3 presets exactly as IMPLEMENTATION_PLAN.md §6. Guard badge when any persona score &lt; 40.
+Use React keys by candidate id and CSS transform transitions for reordering. No layout thrash: no
+getBoundingClientRect per frame.
+Done-check: npm test -- --run src/ui/ranking (unit tests for normalize, sorting, guard);
+npm run e2e -- ranking.spec.ts measuring input-&gt;DOM reorder with MutationObserver, median of 20 &lt; 100 ms.
+</code></pre>
+<p><strong>C6 · cockpit (Claude Sonnet).</strong> <code>{ALLOWED}</code> = <code>src/ui/cockpit/</code>, <code>e2e/cockpit.spec.ts</code>.</p>
+<pre><code class="language-text">Goal: src/ui/cockpit/Cockpit.tsx (default export): consensus dial (min and mean of the 4 PersonaResult.score of the
+selected candidate), 4 persona cards (score, topFriction chip, verdict or &quot;verdict pending&quot;), brief panel
+(why, comparisons, losers), button &quot;Apply Claude mitigation&quot; -&gt; SimClient.run(selectedId, scenario,
+brief.losers.map(l =&gt; l.mitigation), seed) then store update, button &quot;Export council brief&quot; -&gt; Blob download
+council-brief.md with brief.councilBriefMd.
+Done-check: npm run e2e -- cockpit.spec.ts (cards show fixture scores, download text equals councilBriefMd,
+Apply triggers exactly one adapter call and re-renders).
+</code></pre>
+<p><strong>C7 · sim layers and perf (Codex).</strong> <code>{ALLOWED}</code> = <code>src/ui/map/simLayers.ts</code>, <code>src/ui/controls/</code>, <code>src/ui/perf/</code>, <code>e2e/perf.spec.ts</code>.</p>
+<pre><code class="language-text">Goal: export buildSimLayers(result, slice, timeSec) returning TripsLayer (getPath [lng,lat], getTimestamps tSec,
+persona colours, trailLength 120, currentTime timeSec), HeatmapLayer from bySlice[slice].heat, bottleneck
+ScatterplotLayer (radius by severity, tooltip cause+time), kiosk IconLayer or ScatterplotLayer when
+result.mitigations is non-empty. src/ui/controls/TimeControls.tsx: slice slider (3 stops) and play/pause; one
+requestAnimationFrame loop updates timeSec. Only the TripsLayer changes per frame; keep data arrays stable
+(useMemo) so deck.gl does not re-upload buffers. src/ui/perf/fps.ts writes a rolling 1 s fps to window.__fps when
+location.search has perf=1. MapView integration: the orchestrator adds one line; export what it needs and document it.
+Done-check: npm run build; npm run e2e -- perf.spec.ts --headed (median __fps over 10 s &gt;= 55 with 100 trails).
+</code></pre>
+<p><strong>C8 · what-if and compare (Claude Sonnet).</strong> <code>{ALLOWED}</code> = <code>src/ui/whatif/</code>, <code>src/ui/compare/</code>, <code>e2e/whatif.spec.ts</code>.</p>
+<pre><code class="language-text">Goal: WhatIfBar.tsx (default export): Sunny / Rainy / Christmas buttons set store.scenario and call SimClient.run
+for every shortlisted candidate (passedFilter true, plus benchmarks), with a spinner and a disabled state while
+running. Missing fixture for a scenario shows &quot;scenario not available offline&quot;. Compare.tsx: two selected candidates
+side by side, 5 criteria and 4 persona scores.
+Done-check: npm run e2e -- whatif.spec.ts.
+</code></pre>
+<p><strong>Cross-review prompt (other vendor, read-only).</strong></p>
+<pre><code class="language-text">Review the diff of branch {BRANCH} against main for: fields not present in src/contracts.ts, hard-coded scores,
+files edited outside {ALLOWED}, new dependencies, secrets or .env access, deck.gl layers rebuilt every render,
+and broken done-check specs. Report findings with file:line. Do not edit files.
+</code></pre>
+<h3>5.3 Ruddr handoff block</h3>
+<p>Append the "Work autonomously to completion … Handoff report" block from <code>~/.claude/skills/ruddr-delegate/SKILL.md</code> verbatim to every brief.</p>
+<hr />
+<h2>6. Orchestrator loop</h2>
+<h3>6.1 One-time setup (pre-event)</h3>
+<pre><code class="language-bash">cd &quot;/run/media/maheshk/New Volume/MK-solutions/claude_imapct_lab&quot;
+echo &quot;.scratch/&quot; &gt;&gt; .git/info/exclude
+ruddr models add claude claude-sonnet-5-5 --label &quot;Claude Sonnet 5.5&quot;
+ruddr models --json | grep -c sonnet-5-5          # expect 1
+mkdir -p .scratch/c-swarm/{c0,c1,c2,c4,c5,c6,c7,c8}
+# brief.md per agent = preamble + task block + handoff block
+</code></pre>
+<h3>6.2 Launch (example: the 13:30 wave)</h3>
+<pre><code class="language-bash">R=&quot;/run/media/maheshk/New Volume/MK-solutions/claude_imapct_lab&quot;
+for t in c4-map c5-ranking c6-cockpit; do
+  git -C &quot;$R&quot; worktree add &quot;$R/../ut-${t%%-*}&quot; -b &quot;c/$t&quot; c/ui
+done
+( cd &quot;$R/../ut-c4&quot; &amp;&amp; npm ci ) &amp; ( cd &quot;$R/../ut-c5&quot; &amp;&amp; npm ci ) &amp; ( cd &quot;$R/../ut-c6&quot; &amp;&amp; npm ci ) &amp; wait
+
+ruddr run --detach --provider claude --model claude-opus-5-5 --effort high \
+  --cwd &quot;$R/../ut-c4&quot; --sandbox workspace-write --turn-timeout 75m \
+  --prompt-file &quot;$R/.scratch/c-swarm/c4/brief.md&quot; --state-dir &quot;$R/.scratch/c-swarm/c4/run&quot; &amp;
+ruddr run --detach --provider codex --model gpt-6.1-sol --effort high \
+  --cwd &quot;$R/../ut-c5&quot; --sandbox workspace-write --turn-timeout 60m \
+  --prompt-file &quot;$R/.scratch/c-swarm/c5/brief.md&quot; --state-dir &quot;$R/.scratch/c-swarm/c5/run&quot; &amp;
+ruddr run --detach --provider claude --model claude-sonnet-5-5 \
+  --cwd &quot;$R/../ut-c6&quot; --sandbox workspace-write --turn-timeout 60m \
+  --prompt-file &quot;$R/.scratch/c-swarm/c6/brief.md&quot; --state-dir &quot;$R/.scratch/c-swarm/c6/run&quot; &amp;
+wait
+ruddr status --root &quot;$R/.scratch/c-swarm&quot;          # every run must show active
+</code></pre>
+<p>Notes:
+- Always pass <code>--sandbox workspace-write</code>. Ruddr defaults to <code>danger-full-access</code>, and <code>~/.codex/config.toml</code> also sets full access with <code>approval_policy = "never"</code>.
+- <code>workspace-write</code> under Codex blocks network, so <code>npm ci</code> runs from the orchestrator before launch.
+- Playwright starts a dev server, and parallel worktrees would collide on port 5173. C0 makes <code>playwright.config.ts</code> read <code>process.env.PORT ?? 5173</code> for both <code>baseURL</code> and <code>webServer</code> (<code>vite --port $PORT --strictPort</code>). Each agent runs its specs with <code>PORT=517N</code>, where N is the digit of its ID (C4 → 5174 … C8 → 5178).</p>
+<p><strong>Fallback without Ruddr</strong> (not steerable):</p>
+<pre><code class="language-bash"># Codex
+codex exec -C &quot;$R/../ut-c5&quot; -m gpt-6.1-sol -c model_reasoning_effort=&quot;high&quot; -s workspace-write \
+  --json -o &quot;$R/.scratch/c-swarm/c5/last.md&quot; - &lt; &quot;$R/.scratch/c-swarm/c5/brief.md&quot; &gt; &quot;$R/.scratch/c-swarm/c5/events.jsonl&quot;
+# Claude (cd into the worktree first; -p reads the prompt from stdin)
+cd &quot;$R/../ut-c6&quot; &amp;&amp; claude -p --model claude-sonnet-5-5 --effort medium --permission-mode acceptEdits \
+  --max-budget-usd 4 --output-format json &lt; &quot;$R/.scratch/c-swarm/c6/brief.md&quot; &gt; &quot;$R/.scratch/c-swarm/c6/out.json&quot;
+</code></pre>
+<p><code>codex exec --worktree</code> and <code>claude -w &lt;name&gt;</code> also create managed worktrees, but they pick their own paths. The plan uses explicit <code>git worktree add</code> so the merge commands stay predictable.</p>
+<h3>6.3 Monitor and steer</h3>
+<pre><code class="language-bash">ruddr tui --root &quot;$R/.scratch/c-swarm&quot;                         # live view in a side terminal
+ruddr peek --root &quot;$R/.scratch/c-swarm&quot;                         # last trace lines per agent
+ruddr wait --root &quot;$R/.scratch/c-swarm&quot; --any --timeout 10m     # returns when the next one finishes
+ruddr steer --state-dir &quot;$R/.scratch/c-swarm/c5/run&quot; &quot;store.ts now has field X; rebase on c/ui&quot;
+ruddr interrupt --state-dir &quot;$R/.scratch/c-swarm/c4/run&quot;        # wrong premise
+</code></pre>
+<p>Check every agent in its first 2 minutes (<code>peek</code> shows file reads, not an error loop), then every 10 minutes. A silent <code>trace.log</code> for more than 10 minutes counts as a stall.</p>
+<h3>6.4 Verify independently (never trust the handoff report)</h3>
+<p>For each finished agent:</p>
+<pre><code class="language-bash">cd &quot;$R/../ut-c5&quot;
+git status --short                                   # only files under {ALLOWED}?
+git diff --name-only | grep -vE '^(src/ui/ranking/|e2e/ranking.spec.ts)' &amp;&amp; echo &quot;SCOPE VIOLATION&quot;
+git diff | grep -nE 'sk-ant|ANTHROPIC|process\.env\.[A-Z_]*KEY' &amp;&amp; echo &quot;SECRET?&quot;
+npx tsc --noEmit &amp;&amp; npm test -- --run &amp;&amp; PORT=5175 npm run e2e -- ranking.spec.ts
+</code></pre>
+<p>Then run the cross-review from the other vendor. <code>codex review --help</code> lists <code>--base &lt;BRANCH&gt;</code> and a positional <code>[PROMPT]</code>; if this version rejects the combination, drop the prompt and keep <code>--base</code>.</p>
+<pre><code class="language-bash"># Claude-written branch reviewed by Codex
+git -C &quot;$R/../ut-c6&quot; add -A &amp;&amp; git -C &quot;$R/../ut-c6&quot; commit -m &quot;c6: cockpit&quot;
+cd &quot;$R/../ut-c6&quot; &amp;&amp; codex review --base c/ui &quot;$(cat &quot;$R/.scratch/c-swarm/review.md&quot;)&quot;
+# Codex-written branch reviewed by Claude, read-only
+cd &quot;$R/../ut-c5&quot; &amp;&amp; git diff c/ui... | claude -p --model claude-sonnet-5-5 --permission-mode plan \
+  --max-budget-usd 1 &quot;$(cat &quot;$R/.scratch/c-swarm/review.md&quot;)&quot;
+</code></pre>
+<p>Mahesh fixes or steers on any real finding, then merges:</p>
+<pre><code class="language-bash">git -C &quot;$R&quot; switch c/ui &amp;&amp; git -C &quot;$R&quot; merge --no-ff c/c5-ranking
+cd &quot;$R&quot; &amp;&amp; npm ci &amp;&amp; npm run build &amp;&amp; npm test -- --run &amp;&amp; npm run e2e
+git -C &quot;$R&quot; worktree remove &quot;$R/../ut-c5&quot;
+</code></pre>
+<h3>6.5 Failure policy</h3>
+<table>
+<thead>
+<tr>
+<th>Situation</th>
+<th>Action</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Agent stalls (no trace for 10 min)</td>
+<td><code>ruddr interrupt</code>, then <code>ruddr run --resume-thread &lt;id&gt;</code> with a brief that states what it already learned.</td>
+</tr>
+<tr>
+<td>Done-check fails after the agent claims success</td>
+<td><code>ruddr steer</code> with the verbatim failing output. This is attempt 2.</td>
+</tr>
+<tr>
+<td>Fails twice</td>
+<td>Re-scope (cut the Should part), <strong>or</strong> switch vendor with the same brief plus the two failure logs, <strong>or</strong> Mahesh does it by hand if it is under 30 minutes of work. After 15:00, prefer by hand.</td>
+</tr>
+<tr>
+<td>Scope violation</td>
+<td>Discard the out-of-scope files with <code>git checkout -- &lt;file&gt;</code> and steer once. A second violation ends the run.</td>
+</tr>
+<tr>
+<td>Agent edits <code>contracts.ts</code></td>
+<td>Revert and steer. Contract changes go only through B and D at the 13:20 freeze.</td>
+</tr>
+</tbody>
+</table>
+<h3>6.6 Budget</h3>
+<p>Codex runs use the ChatGPT-plan quota of the <code>codex</code> login (the plan tier was not checked here). Claude runs cost API or plan usage. Caps below apply through <code>--max-budget-usd</code> when an agent runs via <code>claude -p</code>. Ruddr has no budget flag, so Mahesh watches Claude runs in <code>ruddr tui</code> and interrupts at the time limit.</p>
+<table>
+<thead>
+<tr>
+<th>Agent</th>
+<th>Est. tokens (in+out)</th>
+<th>Cap</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>C0 Codex high</td>
+<td>1.5 M</td>
+<td>45 min</td>
+</tr>
+<tr>
+<td>C1 Sonnet</td>
+<td>0.6 M</td>
+<td>$3</td>
+</tr>
+<tr>
+<td>C2 Haiku</td>
+<td>0.8 M</td>
+<td>$1</td>
+</tr>
+<tr>
+<td>C4 Opus high</td>
+<td>3 M</td>
+<td>$15, 75 min</td>
+</tr>
+<tr>
+<td>C5 Codex high</td>
+<td>1.5 M</td>
+<td>60 min</td>
+</tr>
+<tr>
+<td>C6 Sonnet</td>
+<td>1 M</td>
+<td>$4</td>
+</tr>
+<tr>
+<td>C7 Codex high</td>
+<td>2 M</td>
+<td>60 min</td>
+</tr>
+<tr>
+<td>C8 Sonnet</td>
+<td>0.8 M</td>
+<td>$3</td>
+</tr>
+<tr>
+<td>Cross-reviews (×7)</td>
+<td>0.3 M each</td>
+<td>$1 each (Claude)</td>
+</tr>
+<tr>
+<td>C10 Opus interactive</td>
+<td>3 M</td>
+<td>$15</td>
+</tr>
+<tr>
+<td><strong>Total Claude</strong></td>
+<td></td>
+<td><strong>≈ $50 hard ceiling</strong></td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2>7. Integration at 17:00</h2>
+<table>
+<thead>
+<tr>
+<th>Step</th>
+<th>What</th>
+<th>Check</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td>B exports a worker entry (<code>src/sim/worker.ts</code>) that takes <code>{candidateId, scenario, mitigations, seed}</code> and posts a <code>SimulationResult</code>. C writes <code>adapters/worker.ts</code> with <code>new Worker(new URL('../../sim/worker.ts', import.meta.url), {type:'module'})</code>.</td>
+<td><code>demo.spec.ts</code> with <code>?data=worker</code> gets 3 results in &lt; 1.5 s each.</td>
+</tr>
+<tr>
+<td>2</td>
+<td>D exposes <code>/api/brief</code> (POST JSON in, <code>Brief</code> out). Vite <code>server.proxy</code> points <code>/api</code> to D's server port. C writes <code>adapters/http.ts</code>. On error or &gt; 6 s it falls back to D's cached brief, then to the fixture brief, and shows a "cached" chip.</td>
+<td>Unplug the network: the brief still renders with the chip.</td>
+</tr>
+<tr>
+<td>3</td>
+<td>Replace <code>applyWeights</code> with D's score export, keeping the same signature through a one-line re-export.</td>
+<td><code>ranking.spec.ts</code> still &lt; 100 ms.</td>
+</tr>
+<tr>
+<td>4</td>
+<td>A's <code>public/data/candidates.json</code> replaces the fixture candidates.</td>
+<td>Rejected candidates appear grey with A's reasons.</td>
+</tr>
+<tr>
+<td>5</td>
+<td>Full pitch path (§11) 3 times in a row.</td>
+<td>18:00 freeze gate.</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Fallbacks.</strong> If B is late, the UI stays on <code>?data=fixtures</code> for simulation and uses A's real candidates; trails come from fixtures labeled "fixture". If D is late, the UI shows the fixture brief with the "cached" chip and computes MarketScore with <code>applyWeights</code>. In both cases the URL flag switches back without a rebuild.</p>
+<hr />
+<h2>8. Risks specific to multi-agent UI work</h2>
+<table>
+<thead>
+<tr>
+<th>Risk</th>
+<th>Mitigation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Agents invent contract fields</td>
+<td><code>contracts.ts</code> is read-only; <code>npx tsc --noEmit</code> is in every done-check; fixtures use <code>satisfies</code>; cross-review checks for unknown fields; <code>TODO(subagent)</code> is the only allowed escape.</td>
+</tr>
+<tr>
+<td>Conflicting Tailwind or theme choices</td>
+<td>Theme tokens and persona colours live in <code>src/index.css</code> from C0 and are read-only; the preamble lists the hex values; no new CSS files or UI libraries.</td>
+</tr>
+<tr>
+<td>deck.gl version mismatch</td>
+<td>All <code>@deck.gl/*</code> pinned to one exact version in C0; agents cannot edit <code>package.json</code>; <code>npm ls @deck.gl/core</code> in the merge check.</td>
+</tr>
+<tr>
+<td>Flaky perf measurements</td>
+<td>FPS is measured in-app over 10 s, headed, on the demo laptop, median of 3 runs; headless Chromium numbers are ignored. Ranking latency uses the median of 20 changes.</td>
+</tr>
+<tr>
+<td>Agents commit secrets</td>
+<td>Agents never commit; the preamble forbids <code>.env</code>; <code>.env</code> is in <code>.gitignore</code> from C0; the merge check greps the diff for keys; Codex runs in <code>workspace-write</code> instead of the config default <code>danger-full-access</code>.</td>
+</tr>
+<tr>
+<td>Port and <code>npm</code> collisions between worktrees</td>
+<td>One worktree per agent, <code>npm ci</code> per worktree, <code>PORT=517N</code> per spec run.</td>
+</tr>
+<tr>
+<td>Merge conflicts in shared files</td>
+<td>Shared files are hand-written by Mahesh and read-only for agents; <code>App.tsx</code> mounts stubs from the start.</td>
+</tr>
+<tr>
+<td>Misaligned aerial photo</td>
+<td>4-corner bounds from pyproj; C1 check asserts Lorenzkirche falls inside the right quadrant; Mahesh inspects <code>map.png</code>.</td>
+</tr>
+<tr>
+<td>Agent spends the window on Stretch work</td>
+<td>C9 starts only if C4–C8 are merged by 16:30.</td>
+</tr>
+</tbody>
+</table></body></html>
