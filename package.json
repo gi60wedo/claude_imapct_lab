@@ -1,0 +1,19 @@
+{
+  "name": "urbantwin-market-sim",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "sim:dev-data": "tsx src/sim/dev/buildDevData.ts",
+    "sim:report": "tsx src/sim/dev/report.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.4",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.3"
+  }
+}
