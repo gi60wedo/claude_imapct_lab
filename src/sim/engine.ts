@@ -14,13 +14,34 @@ export interface SimOptions {
   scenario: Scenario;
   seed: number;
   mitigations?: Mitigation[];
-  /** Share of people simulated as agents (default 0.25). */
+  /** Share of modelled people simulated as agents, per run (default P.DEFAULT_SCALE = 0.25). The live view runs 1. */
   scale?: number;
-  /** Trails returned for the map (default 100). */
+  /** Trails returned for the map (default 100). Pass Infinity, or at least the agent count, for every agent. */
   maxTrips?: number;
 }
 
-type TripKind = 'senior' | 'commuter' | 'vendor' | 'visitor' | 'passer';
+/** Every kind of agent the engine moves. */
+export type TripKind = 'senior' | 'commuter' | 'vendor' | 'resident' | 'tourist' | 'passer';
+
+/**
+ * Which contract persona draws each agent kind on the map. The contract has four personas, so the
+ * shoppers and passers who are not one of them map to the persona whose score they drive.
+ *
+ * | kind     | who                                                      | persona  |
+ * |----------|----------------------------------------------------------|----------|
+ * | senior   | residents 65+ (Oma Helga)                                | senior   |
+ * | vendor   | 3.5 t vans 05:30–07:00 (Markus)                          | vendor   |
+ * | commuter | U-Bahn lunch shoppers 11:30–13:30 (Lukas)                | commuter |
+ * | resident | residents under 65 who visit the market                  | retailer |
+ * | tourist  | visitors starting at an attraction                       | retailer |
+ * | passer   | pedestrians in the Altstadt anyway (trains, attractions) | retailer |
+ *
+ * Residents, tourists and passers are the footfall past nearby shop windows that scores Frau Weber.
+ */
+// TODO(subagent): contract needs trip kind (SimulationResult.trips[].kind) to tell residents, tourists and passers apart.
+export const KIND_PERSONA: Record<TripKind, PersonaId> = {
+  senior: 'senior', vendor: 'vendor', commuter: 'commuter', resident: 'retailer', tourist: 'retailer', passer: 'retailer',
+};
 
 /** A moving agent: polyline with a timestamp per vertex and the graph edge of each segment (-1 off-graph). */
 interface Trip { kind: TripKind; xs: number[]; ys: number[]; ts: number[]; seg: number[] }
@@ -88,7 +109,7 @@ export function simulate(pw: PreparedWorld, cand: Candidate, opts: SimOptions): 
                  senior: boolean, atKiosk: boolean, r: Rng) => {
     const leg = pathFrom(sp, origin);
     if (leg.nodes.length === 0) return;
-    const out = walkTrip(pw, ctx, leg.nodes, leg.edges, 0, senior);
+    const out = walkTrip(pw, ctx, kind, leg.nodes, leg.edges, 0, senior);
     const travel = out.ts[out.ts.length - 1];
     const depart = kind === 'commuter' ? arriveAt : Math.max(P.MARKET_OPEN - 1800, arriveAt - travel);
     const trip: Trip = { kind, xs: [], ys: [], ts: [], seg: [] };
@@ -105,7 +126,7 @@ export function simulate(pw: PreparedWorld, cand: Candidate, opts: SimOptions): 
     }
     t += atKiosk ? dwellSec : dwellSec / 5;
     pushPoint(trip, g.x[end], g.y[end], t, -1);
-    const back = walkTrip(pw, ctx, [...leg.nodes].reverse(), [...leg.edges].reverse(), 0, senior);
+    const back = walkTrip(pw, ctx, kind, [...leg.nodes].reverse(), [...leg.edges].reverse(), 0, senior);
     appendShifted(trip, back, t);
     trips.push(trip);
     visitorTrips.push({ trip, legNodes: leg.nodes, legEdges: leg.edges, kind });
@@ -169,7 +190,7 @@ export function simulate(pw: PreparedWorld, cand: Candidate, opts: SimOptions): 
     const r = fork(seed, `${a.kind}:${cand.id}:${a.node}:${a.arriveAt}`);
     if (r() < p) {
       visitorServed++;
-      visit('visitor', spWalk, a.node, a.arriveAt, a.dwellSec, false, false, r);
+      visit(a.kind, spWalk, a.node, a.arriveAt, a.dwellSec, false, false, r);
     }
   }
 
@@ -210,8 +231,7 @@ export function simulate(pw: PreparedWorld, cand: Candidate, opts: SimOptions): 
   let exposedPassers = 0;
   const passerRng = fork(seed, `impulse:${cand.id}:${scenario}`);
   for (const ps of pool.passers) {
-    const trip = walkTrip(pw, ctx, ps.nodes, ps.edges, ps.depart, false);
-    trip.kind = 'passer';
+    const trip = walkTrip(pw, ctx, 'passer', ps.nodes, ps.edges, ps.depart, false);
     trips.push(trip);
     const hit = ps.nodes.find((i) => nearSite[i]);
     if (hit === undefined) continue;
@@ -301,8 +321,9 @@ function appendShifted(dst: Trip, src: Trip, offset: number) {
   for (let i = 0; i < src.xs.length; i++) pushPoint(dst, src.xs[i], src.ys[i], src.ts[i] + offset, i === 0 ? -1 : src.seg[i - 1]);
 }
 
-function walkTrip(pw: PreparedWorld, ctx: CostContext, nodes: number[], edges: number[], t0: number, senior: boolean): Trip {
-  const trip: Trip = { kind: senior ? 'senior' : 'visitor', xs: [], ys: [], ts: [], seg: [] };
+function walkTrip(pw: PreparedWorld, ctx: CostContext, kind: TripKind, nodes: number[], edges: number[], t0: number,
+                  senior: boolean): Trip {
+  const trip: Trip = { kind, xs: [], ys: [], ts: [], seg: [] };
   let t = t0;
   pushPoint(trip, pw.g.x[nodes[0]], pw.g.y[nodes[0]], t, -1);
   for (let i = 0; i < edges.length; i++) {
@@ -314,26 +335,61 @@ function walkTrip(pw: PreparedWorld, ctx: CostContext, nodes: number[], edges: n
   return trip;
 }
 
+/**
+ * Trails for the map, at most `max`. Vans, seniors and lunch commuters come first (up to 20 vans, then half
+ * each of the rest); any room left goes to a seeded shuffle of all other agents. With `max` at least
+ * the agent count, every agent is returned.
+ */
 function sampleTrips(pw: PreparedWorld, trips: Trip[], max: number, rng: Rng): SimulationResult['trips'] {
-  const pick = (kind: TripKind, n: number) => {
-    const list = trips.filter((t) => t.kind === kind);
+  const shuffle = (list: Trip[]) => {
     for (let i = list.length - 1; i > 0; i--) { const j = Math.floor(rng() * (i + 1)); [list[i], list[j]] = [list[j], list[i]]; }
-    return list.slice(0, n);
+    return list;
   };
+  const pick = (kind: TripKind, n: number) => shuffle(trips.filter((t) => t.kind === kind)).slice(0, n);
   const vans = pick('vendor', Math.min(20, max));
   const rest = max - vans.length;
-  const chosen: [PersonaId, Trip][] = [
-    ...vans.map((t) => ['vendor', t] as [PersonaId, Trip]),
-    ...pick('senior', Math.ceil(rest / 2)).map((t) => ['senior', t] as [PersonaId, Trip]),
-    ...pick('commuter', Math.floor(rest / 2)).map((t) => ['commuter', t] as [PersonaId, Trip]),
-  ];
-  return chosen.map(([persona, t]) => ({
-    persona,
-    path: t.xs.map((x, i) => {
-      const [lng, lat] = pw.proj.toLngLat(x, t.ys[i]);
+  const first = [...vans, ...pick('senior', Math.ceil(rest / 2)), ...pick('commuter', Math.floor(rest / 2))];
+  const taken = new Set(first);
+  const fill = max - first.length;
+  const chosen = fill > 0 ? [...first, ...shuffle(trips.filter((t) => !taken.has(t))).slice(0, fill)] : first;
+  return chosen.map((t) => ({
+    persona: KIND_PERSONA[t.kind],
+    path: keyVertices(t, P.TRAIL_TOLERANCE_M).map((i) => {
+      const [lng, lat] = pw.proj.toLngLat(t.xs[i], t.ys[i]);
       return [Math.round(lng * 1e6) / 1e6, Math.round(lat * 1e6) / 1e6, Math.round(t.ts[i])] as [number, number, number];
     }),
   }));
+}
+
+/**
+ * Vertices to keep so that moving linearly in time between them puts the agent within `tol` metres of every
+ * dropped vertex at that vertex's time (Douglas–Peucker in space-time). Straight walks at one pace collapse
+ * to their ends; turns, pace changes and dwells stay.
+ */
+function keyVertices(t: Trip, tol: number): number[] {
+  const n = t.xs.length;
+  if (n <= 2) return Array.from({ length: n }, (_, i) => i);
+  const keep = new Uint8Array(n);
+  keep[0] = keep[n - 1] = 1;
+  const stack: [number, number][] = [[0, n - 1]];
+  while (stack.length) {
+    const [a, b] = stack.pop()!;
+    const span = t.ts[b] - t.ts[a];
+    let worst = -1, worstErr = tol * tol;
+    for (let i = a + 1; i < b; i++) {
+      const u = span > 0 ? (t.ts[i] - t.ts[a]) / span : 0;
+      const dx = t.xs[i] - (t.xs[a] + u * (t.xs[b] - t.xs[a]));
+      const dy = t.ys[i] - (t.ys[a] + u * (t.ys[b] - t.ys[a]));
+      const err = dx * dx + dy * dy;
+      if (err > worstErr) { worst = i; worstErr = err; }
+    }
+    if (worst < 0) continue;
+    keep[worst] = 1;
+    stack.push([a, worst], [worst, b]);
+  }
+  const out: number[] = [];
+  for (let i = 0; i < n; i++) if (keep[i]) out.push(i);
+  return out;
 }
 
 // ── Stalls ─────────────────────────────────────────────────────────────────────

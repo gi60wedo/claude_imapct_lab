@@ -3,7 +3,24 @@ import type { SimOptions, World } from '../../sim';
 import type { WorkerRequest, WorkerResponse } from '../../sim/worker';
 import { fixtureSim } from './fixtures';
 import { toMitigation } from './mitigations';
-import type { SimClient } from './types';
+import type { RunOptions, SimClient } from './types';
+
+/** Live runs simulate every modelled person, not the engine's default quarter. */
+export const LIVE_SCALE = 1;
+/**
+ * Trip cap for live runs, high enough that every agent comes back. A scale-1 run on public/data/world.json
+ * moves at most a few thousand agents (src/sim/__tests__/scale.test.ts prints the counts).
+ */
+export const LIVE_TRIP_CAP = 100_000;
+
+/**
+ * Engine options for one run. A caller that asks for trips (the live view) or sets a scale gets a live run:
+ * scale 1 unless it names one, and every agent up to LIVE_TRIP_CAP. Other callers keep the engine defaults.
+ */
+export function liveOptions(run: RunOptions): Pick<SimOptions, 'scale' | 'maxTrips'> {
+  if (run.maxTrips === undefined && run.scale === undefined) return {};
+  return { scale: run.scale ?? LIVE_SCALE, maxTrips: Math.max(run.maxTrips ?? 0, LIVE_TRIP_CAP) };
+}
 
 const getJson = async <T>(url: string): Promise<T> => {
   const r = await fetch(url);
@@ -58,13 +75,14 @@ export function workerSim(): SimClient {
 
   return {
     candidates: loadCandidates,
-    async run(candidateId: string, scenario: Scenario, mitigations: string[], seed: number) {
+    async run(candidateId: string, scenario: Scenario, mitigations: string[], seed: number, run: RunOptions = {}) {
       const site = (await loadCandidates()).find((c) => c.id === candidateId);
       if (!site) throw new Error(`unknown candidate ${candidateId}`);
       await ready;
       const opts: SimOptions = {
         scenario, seed,
         mitigations: mitigations.map((m) => toMitigation(m, site)).filter((m) => m !== null),
+        ...liveOptions(run),
       };
       const id = nextId++;
       const candidate = { ...site, id: engineIds.get(site.id) ?? site.id };

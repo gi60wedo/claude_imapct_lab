@@ -183,7 +183,9 @@ describe('review regressions', () => {
     const r = simulate(prepared(w, [agent('commuter', 1, 41400)]), smallSite, opts);
     expect(r.stallExposure).toHaveLength(1);
     const trip = r.trips.find((t) => t.persona === 'commuter')!;
-    expect(trip.path[3][2] - trip.path[1][2]).toBe(Math.round(P.COMMUTER_SHOP_MIN * 60 * 0.7));
+    // Trails are simplified, so find the dwell as the segment where the agent stays put.
+    const stay = trip.path.findIndex((p, i) => i > 0 && p[0] === trip.path[i - 1][0] && p[1] === trip.path[i - 1][1]);
+    expect(trip.path[stay][2] - trip.path[stay - 1][2]).toBe(Math.round(P.COMMUTER_SHOP_MIN * 60 * 0.7));
   });
 
   it('keeps a kiosk visitor at the kiosk for the full configured service time', () => {
