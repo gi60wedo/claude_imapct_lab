@@ -1,0 +1,30 @@
+{
+  "_doc": "Benchmarks are always shortlisted. deny = discovered sites excluded by hand, shown greyed out with the stated reason. Keys are '<osm type>/<osm id>'.",
+  "benchmarks": [
+    {
+      "id": "hauptmarkt",
+      "name": "Hauptmarkt (current site)",
+      "baseKind": "square",
+      "osm": ["way/136698909"]
+    },
+    {
+      "id": "lorenzkirche",
+      "name": "St. Lorenzkirche plaza",
+      "baseKind": "pedestrian",
+      "note": "OSM maps Lorenzer Platz only as pedestrian lines; the plaza is those lines buffered by bufferM, kept within clipM of the St. Lorenz church (way 144721691), minus LoD2 buildings",
+      "osmLines": ["way/136793807", "way/160983142", "way/316484911", "way/316484912", "way/619761022", "way/776256197"],
+      "bufferM": 9,
+      "clipAround": "way/144721691",
+      "clipM": 40
+    },
+    {
+      "id": "kaufhof",
+      "name": "Former Kaufhof, Königstraße 42-52 (ground floor)",
+      "baseKind": "ground_floor",
+      "note": "OSM way 144721687: old_name=Galeria Kaufhof, disused:shop=department_store",
+      "osm": ["way/144721687"]
+    }
+  ],
+  "deny": {},
+  "minGroundFloorM2": 300
+}

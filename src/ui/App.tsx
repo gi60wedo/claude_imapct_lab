@@ -3,24 +3,32 @@ import Cockpit from './cockpit/Cockpit';
 import SimOverlay from './controls/SimOverlay';
 import RankingPanel from './ranking/RankingPanel';
 import WhatIfBar from './whatif/WhatIfBar';
-import { briefClient, sim } from './adapters';
-import { getState, resultKey, setState } from './state/store';
+import { LIVE_BRIEF, briefClient, sim } from './adapters';
+import { startLive } from './live/live';
+import { getState, pickShortlist, resultKey, setState } from './state/store';
 
 async function boot() {
   setState({ loading: true });
   const candidates = await sim.candidates();
-  const shortlist = candidates.filter((c) => c.passedFilter);
+  const shortlist = pickShortlist(candidates);
   const { scenario } = getState();
   const results = await Promise.allSettled(shortlist.map((c) => sim.run(c.id, scenario, [], 42)));
   const map: Record<string, import('../contracts').SimulationResult> = {};
   for (const r of results) if (r.status === 'fulfilled') map[resultKey(r.value.candidateId, r.value.scenario)] = r.value;
-  const brief = await briefClient.brief({ candidates, results: Object.values(map), weights: getState().weights, scenario });
+  // Live mode shows the map straight away; startLive() fetches the real brief afterwards.
+  const brief = LIVE_BRIEF ? null : await briefClient.brief({ candidates, results: Object.values(map), weights: getState().weights, scenario });
   const first = Object.values(map)[0]?.candidateId ?? null;
   setState({ candidates, results: map, brief, selectedId: first, loading: false });
 }
 
 export default function App() {
-  useEffect(() => { boot().catch((e) => { console.error(e); setState({ loading: false }); }); }, []);
+  useEffect(() => {
+    let stop: (() => void) | undefined;
+    boot()
+      .then(() => { if (LIVE_BRIEF) stop = startLive(); })
+      .catch((e) => { console.error(e); setState({ loading: false }); });
+    return () => stop?.();
+  }, []);
   return (
     <div className="grid h-screen w-screen grid-cols-[1fr_380px] grid-rows-[auto_1fr_auto] bg-background text-foreground">
       <header className="col-span-2 flex items-center gap-4 border-b border-border px-4 py-2">

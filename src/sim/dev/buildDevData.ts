@@ -2,9 +2,10 @@
 // src/sim/dev/data/stations.dev.json. A's prep/ owns the real arrivals.json; this unblocks B until then.
 // Usage: npm run sim:dev-data   (needs `unzip` on PATH)
 import { spawn } from 'node:child_process';
-import { writeFileSync, mkdirSync } from 'node:fs';
+import { writeFileSync, mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
+import { fileURLToPath } from 'node:url';
 import type { StationArrivals } from '../world';
 import { BBOX, normalizeStation, REPO, STATIONS_PATH } from './osmWorld';
 
@@ -12,28 +13,66 @@ const ZIP = resolve(REPO, 'datasets/gtfs/vgn_gtfs.zip');
 const SATURDAY = '20261010';
 const WINDOW = [5 * 3600, 15.5 * 3600];
 
-function lines(file: string): AsyncIterable<string> {
+async function* lines(file: string): AsyncIterable<string> {
   const p = spawn('unzip', ['-p', ZIP, file]);
-  return createInterface({ input: p.stdout, crlfDelay: Infinity });
+  let stderr = '';
+  p.stderr.on('data', (chunk) => { stderr = (stderr + String(chunk)).slice(-4096); });
+  // Attach listeners before consuming stdout. Resolve errors as values to avoid an unhandled
+  // rejection while a large table is still streaming.
+  let finished = false;
+  const completion = new Promise<{ code: number | null; signal?: string | null; error?: Error }>((done) => {
+    p.once('error', (error) => { finished = true; done({ code: null, error }); });
+    p.once('close', (code, signal) => { finished = true; done({ code, signal }); });
+  });
+  const reader = createInterface({ input: p.stdout, crlfDelay: Infinity });
+  try {
+    for await (const line of reader) yield line;
+    const result = await completion;
+    if (result.error || result.code !== 0) {
+      throw new Error(`GTFS extraction failed for ${file}: ${result.error?.message ?? result.signal ?? `exit ${result.code}`} ${stderr}`.trim());
+    }
+  } finally {
+    reader.close();
+    if (!finished) p.kill();
+  }
 }
 
 function parse(line: string): string[] {
-  return line.replace(/^﻿/, '').split(',').map((c) => c.replace(/^"|"$/g, ''));
+  const cols: string[] = [];
+  let value = '', quoted = false;
+  line = line.replace(/^﻿/, '');
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (c === '"') {
+      if (quoted && line[i + 1] === '"') { value += '"'; i++; }
+      else quoted = !quoted;
+    } else if (c === ',' && !quoted) { cols.push(value); value = ''; }
+    else value += c;
+  }
+  if (quoted) throw new Error('Unterminated quote in GTFS CSV');
+  cols.push(value);
+  return cols;
 }
 
 async function table(file: string, onRow: (row: Record<string, string>) => void) {
+  console.log(`Reading GTFS ${file}`);
   let header: string[] | null = null;
   for await (const line of lines(file)) {
     if (!line) continue;
     const cols = parse(line);
-    if (!header) { header = cols; continue; }
+    if (!header) {
+      if (cols.some((c) => !c) || new Set(cols).size !== cols.length) throw new Error(`Invalid GTFS header in ${file}`);
+      header = cols; continue;
+    }
+    if (cols.length !== header.length) throw new Error(`Invalid GTFS row in ${file}`);
     const row: Record<string, string> = {};
     header.forEach((h, i) => (row[h] = cols[i]));
     onRow(row);
   }
+  if (!header) throw new Error(`Empty GTFS table ${file}`);
 }
 
-async function main() {
+export async function buildDevData(destination = STATIONS_PATH) {
   const weekday = new Date(`${SATURDAY.slice(0, 4)}-${SATURDAY.slice(4, 6)}-${SATURDAY.slice(6)}`).getDay();
   if (weekday !== 6) throw new Error(`${SATURDAY} is not a Saturday`);
 
@@ -80,7 +119,10 @@ async function main() {
     const mode = tripMode.get(r.trip_id);
     const parent = mode && stopToParent.get(r.stop_id);
     if (!parent || !parents.has(parent)) return;
-    const [h, m, s] = r.arrival_time.split(':').map(Number);
+    const arrivalTime = r.arrival_time.trim();
+    if (!arrivalTime) return; // GTFS permits untimed intermediate stops.
+    if (!/^\d{1,}:[0-5]\d:[0-5]\d$/.test(arrivalTime)) throw new Error(`Invalid GTFS arrival ${r.arrival_time}`);
+    const [h, m, s] = arrivalTime.split(':').map(Number);
     const t = h * 3600 + m * 60 + s;
     if (t < WINDOW[0] || t > WINDOW[1]) return;
     const key = `${parent}|${mode}`;
@@ -94,10 +136,27 @@ async function main() {
     return { name: p.name, lng: +p.lng.toFixed(6), lat: +p.lat.toFixed(6), mode: a.mode, arrivals: a.times.sort((x, y) => x - y) };
   }).sort((a, b) => a.name.localeCompare(b.name) || a.mode.localeCompare(b.mode));
 
-  mkdirSync(dirname(STATIONS_PATH), { recursive: true });
-  writeFileSync(STATIONS_PATH, JSON.stringify(stations));
+  if (!stations.length || stations.some((s) => !s.name || !Number.isFinite(s.lng) || !Number.isFinite(s.lat) ||
+    !s.arrivals.length || s.arrivals.some((t) => !Number.isInteger(t) || t < WINDOW[0] || t > WINDOW[1]))) {
+    throw new Error('GTFS extraction produced no valid station arrivals');
+  }
+  mkdirSync(dirname(destination), { recursive: true });
+  const tempDir = mkdtempSync(resolve(dirname(destination), '.stations-'));
+  try {
+    const temp = resolve(tempDir, 'stations.json');
+    writeFileSync(temp, JSON.stringify(stations), { flag: 'wx' });
+    renameSync(temp, destination);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
   for (const s of stations) console.log(`${s.mode.padEnd(6)} ${s.name.padEnd(28)} ${s.arrivals.length} arrivals`);
-  console.log(`→ ${STATIONS_PATH} (Saturday ${SATURDAY})`);
+  console.log(`→ ${destination} (Saturday ${SATURDAY})`);
 }
 
-main().catch((e) => { console.error(e); process.exit(1); });
+export function isMainModule(entryPath: string | undefined, moduleUrl = import.meta.url): boolean {
+  return Boolean(entryPath && realpathSync(resolve(entryPath)) === realpathSync(fileURLToPath(moduleUrl)));
+}
+
+if (isMainModule(process.argv[1])) {
+  buildDevData().catch((e) => { console.error(e); process.exitCode = 1; });
+}

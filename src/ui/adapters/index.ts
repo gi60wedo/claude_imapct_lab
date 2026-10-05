@@ -1,9 +1,14 @@
 import { fixtureBrief, fixtureSim } from './fixtures';
+import { httpBrief } from './http';
 import type { BriefClient, SimClient } from './types';
 import { workerSim } from './worker';
 
-const useFixtures = typeof location !== 'undefined' && new URLSearchParams(location.search).get('data') === 'fixtures';
+const params = typeof location !== 'undefined' ? new URLSearchParams(location.search) : new URLSearchParams();
+const useFixtures = params.get('data') === 'fixtures';
 
-/** Live engine in a Web Worker by default; `?data=fixtures` keeps the fixture path. Brief stays on fixtures until D's /api/brief lands. */
+/** `?brief=live` talks to the Part D server (`npm run server`); the default keeps the fixture brief used by e2e. */
+export const LIVE_BRIEF = params.get('brief') === 'live';
+
+/** Live engine in a Web Worker by default; `?data=fixtures` keeps the fixture path. */
 export const sim: SimClient = useFixtures || typeof Worker === 'undefined' ? fixtureSim : workerSim();
-export const briefClient: BriefClient = fixtureBrief;
+export const briefClient: BriefClient = LIVE_BRIEF ? httpBrief : fixtureBrief;

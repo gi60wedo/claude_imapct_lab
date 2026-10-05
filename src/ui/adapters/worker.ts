@@ -30,7 +30,7 @@ const getJson = async <T>(url: string): Promise<T> => {
 
 /**
  * Live SimClient backed by B's engine in a Web Worker.
- * Candidates come from the fixture list (A's discovery output later); the three benchmarks
+ * Candidates come from Part A (/data/candidates.json), else the fixture list, whose three benchmarks
  * take the engine's surveyed polygons from /data/benchmarks.json.
  */
 export function workerSim(): SimClient {
@@ -56,16 +56,22 @@ export function workerSim(): SimClient {
     .catch((e: Error) => readyReject(e));
 
   let candidates: Promise<Candidate[]> | null = null;
-  const loadCandidates = () => (candidates ??= Promise.all([
+  /** UI id → engine benchmark id; the engine keys loading points by its own ids. */
+  const engineIds = new Map<string, string>();
+  const loadCandidates = () => (candidates ??= getJson<{ candidates: Candidate[] }>('/data/candidates.json')
+    .then((f) => f.candidates)          // Part A's discovered candidates; ids match the engine's benchmark ids
+    .catch(() => fixtureCandidates()));
+  const fixtureCandidates = () => Promise.all([
     fixtureSim.candidates(),
     getJson<Candidate[]>('/data/benchmarks.json'),
   ]).then(([list, bench]) => {
     const byId = new Map(bench.map((b) => [b.id.toUpperCase(), b]));
     return list.map((c) => {
       const b = byId.get(c.id);
+      if (b) engineIds.set(c.id, b.id);
       return b ? { ...c, polygon: b.polygon, areaM2: b.areaM2 } : c;
     });
-  }));
+  });
 
   return {
     candidates: loadCandidates,
@@ -79,10 +85,12 @@ export function workerSim(): SimClient {
         ...liveOptions(run),
       };
       const id = nextId++;
-      return new Promise<SimulationResult>((resolve, reject) => {
+      const candidate = { ...site, id: engineIds.get(site.id) ?? site.id };
+      const result = await new Promise<SimulationResult>((resolve, reject) => {
         pending.set(id, { resolve, reject });
-        worker.postMessage({ type: 'run', id, candidate: site, opts } satisfies WorkerRequest);
+        worker.postMessage({ type: 'run', id, candidate, opts } satisfies WorkerRequest);
       });
+      return { ...result, candidateId: site.id };
     },
   };
 }

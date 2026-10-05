@@ -18,3 +18,11 @@ test('live engine scores the shortlist and runs the Christmas scenario', async (
   await expect.poll(async () => (await rows.allInnerTexts()).join('|'), { timeout: 60_000 }).not.toBe(sunny.join('|'));
   expect(errors).toEqual([]);
 });
+
+test('live engine uses Part A loading points and ranks Kaufhof vendors above Lorenzkirche', async ({ page }) => {
+  await page.goto('/');
+  const row = (id: string) => page.locator(`[data-testid="ranking-row"][data-id="${id}"]`);
+  await expect(row('kaufhof')).toBeVisible({ timeout: 60_000 });
+  const vendor = async (id: string) => Number((await row(id).innerText()).match(/Vendor\s+([\d.]+)/)![1]);
+  expect(await vendor('kaufhof')).toBeGreaterThan(await vendor('lorenzkirche'));
+});

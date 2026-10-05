@@ -53,6 +53,38 @@ export function distanceToPolygon(x: number, y: number, poly: [number, number][]
   return best;
 }
 
+/** Check every interval between boundary intersections; midpoint alone misses concave excursions. */
+export function segmentWithinPolygon(a: LngLat, b: LngLat, poly: LngLat[]): boolean {
+  const dx = b[0] - a[0], dy = b[1] - a[1];
+  const len2 = dx * dx + dy * dy;
+  const eps = 1e-7; // Polygon coordinates are local metres.
+  if (distanceToPolygon(...a, poly) > eps || distanceToPolygon(...b, poly) > eps) return false;
+  if (len2 < eps * eps) return true;
+  const cuts = [0, 1];
+  for (let i = 0; i < poly.length; i++) {
+    const p = poly[i], q = poly[(i + 1) % poly.length];
+    const ex = q[0] - p[0], ey = q[1] - p[1];
+    const px = p[0] - a[0], py = p[1] - a[1];
+    const cross = dx * ey - dy * ex;
+    if (Math.abs(cross) > eps) {
+      const t = (px * ey - py * ex) / cross;
+      const u = (px * dy - py * dx) / cross;
+      if (t > 0 && t < 1 && u >= -eps && u <= 1 + eps) cuts.push(t);
+    } else if (Math.abs(px * dy - py * dx) <= eps) {
+      // Collinear boundary segments contribute their endpoints too.
+      for (const v of [p, q]) {
+        const t = ((v[0] - a[0]) * dx + (v[1] - a[1]) * dy) / len2;
+        if (t > 0 && t < 1) cuts.push(t);
+      }
+    }
+  }
+  cuts.sort((x, y) => x - y);
+  return cuts.slice(1).every((t, k) => {
+    const mid = (cuts[k] + t) / 2;
+    return distanceToPolygon(a[0] + mid * dx, a[1] + mid * dy, poly) <= eps;
+  });
+}
+
 export function polygonArea(poly: [number, number][]): number {
   let a = 0;
   for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) a += (poly[j][0] + poly[i][0]) * (poly[j][1] - poly[i][1]);
