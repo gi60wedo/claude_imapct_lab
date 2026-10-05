@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import type { PersonaId, Weights } from '../../contracts';
 import { currentResults, getState, setState, useStore } from '../state/store';
-import { applyWeights, failsStakeholderGroup, normalize, PRESETS, rank, WEIGHT_KEYS } from './applyWeights';
+import { applyWeights, failsStakeholderGroup, normalize, PRESETS, rank, WEIGHT_KEYS, setWeight } from './applyWeights';
 
 const LABELS: Record<keyof Weights, string> = {
   accessibility: 'Accessibility', footfall: 'Footfall', fairness: 'Fairness',
@@ -30,7 +30,7 @@ export default function RankingPanel() {
   const pending = candidates.filter((c) => c.passedFilter && !ranked.some((r) => r.candidateId === c.id));
 
   function changeWeight(key: keyof Weights, value: number) {
-    setState((s) => ({ weights: normalize({ ...s.weights, [key]: value }) }));
+    setState((s) => ({ weights: setWeight(s.weights, key, value) }));
   }
 
   return (

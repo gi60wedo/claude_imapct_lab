@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type { Candidate, SimulationResult, Weights } from '../../contracts';
 import { getState, resultKey, setState } from '../state/store';
 import RankingPanel from './RankingPanel';
-import { applyWeights, failsStakeholderGroup, normalize, PRESETS, rank, WEIGHT_KEYS } from './applyWeights';
+import { applyWeights, failsStakeholderGroup, normalize, PRESETS, rank, WEIGHT_KEYS, setWeight } from './applyWeights';
 
 function result(candidateId: string, criteria: Weights, seniorScore = 70): SimulationResult {
   const persona = { score: 70, served: 7, droppedOut: 3, topFriction: 'Cobblestones' };
@@ -120,11 +120,12 @@ describe('ranking panel', () => {
     expect(getState().selectedId).toBe('fair');
     expect(rows[1].getAttribute('aria-pressed')).toBe('true');
   });
-  it('renormalizes every slider and renders all updated percentages', () => {
+  it('keeps the dragged slider value, rescales the others and renders all updated percentages', () => {
     setup();
     for (const key of WEIGHT_KEYS) {
-      const expected = normalize({ ...getState().weights, [key]: 1 });
-      fireEvent.change(screen.getByTestId(`weight-${key}`), { target: { value: '1' } });
+      const expected = setWeight(getState().weights, key, 0.6);
+      fireEvent.change(screen.getByTestId(`weight-${key}`), { target: { value: '0.6' } });
+      expect(getState().weights[key]).toBeCloseTo(0.6);
       expect(getState().weights).toEqual(expected);
       expect(Object.values(getState().weights).reduce((a, b) => a + b, 0)).toBeCloseTo(1);
       for (const weightKey of WEIGHT_KEYS) {
@@ -175,5 +176,14 @@ describe('ranking panel', () => {
     expect(screen.getByText('2 sites without simulation scores in this scenario.')).toBeTruthy();
     act(() => setState({ loading: true }));
     expect(screen.getByText('Loading site scores…')).toBeTruthy();
+  });
+});
+
+describe('setWeight', () => {
+  it('keeps the dragged value and rescales the others to sum 1', () => {
+    const w = setWeight({ accessibility: 0.3, footfall: 0.25, fairness: 0.2, localBusiness: 0.15, walkability: 0.1 }, 'accessibility', 0.5);
+    expect(w.accessibility).toBeCloseTo(0.5);
+    expect(Object.values(w).reduce((a, b) => a + b, 0)).toBeCloseTo(1);
+    expect(w.footfall / w.fairness).toBeCloseTo(0.25 / 0.2);
   });
 });

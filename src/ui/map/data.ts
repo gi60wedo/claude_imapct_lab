@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 
 export type LngLat = [number, number];
 export interface OrthoTile { url: string; bounds: [LngLat, LngLat, LngLat, LngLat] } // BL, TL, TR, BR
-export interface Building { polygon: LngLat[]; h: number }
+export interface Building { polygon: LngLat[]; holes?: LngLat[][]; h: number }
 
 /** Fetch JSON; resolves null on a non-JSON or non-OK response (Vite serves index.html for unknown paths). */
 async function getJson<T>(url: string): Promise<T | null> {

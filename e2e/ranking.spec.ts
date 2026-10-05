@@ -52,7 +52,8 @@ test('ranking follows fixture scores, selects sites, and responds within 100 ms'
     await expect(page.getByTestId(`preset-${index + 1}`)).toHaveAttribute('aria-pressed', 'true');
   }
   const reorderPossible = orders.some((order) => order.join() !== expectedIds(fixtures.weights).join());
-  if (reorderPossible) {
+  expect(reorderPossible, 'fixtures must let at least one preset reorder the ranking').toBe(true);
+  {
     const changedIndex = orders.findIndex((order) => order.join() !== expectedIds(fixtures.weights).join());
     await page.evaluate(async (weights) => {
       const modulePath = '/src/ui/state/store.ts';
@@ -62,8 +63,6 @@ test('ranking follows fixture scores, selects sites, and responds within 100 ms'
     await page.getByTestId(`preset-${changedIndex + 1}`).click();
     await expect.poll(readIds).toEqual(orders[changedIndex]);
     expect(await readIds()).not.toEqual(expectedIds(fixtures.weights));
-  } else {
-    test.info().annotations.push({ type: 'fixture', description: 'These fixture criteria yield the same order for all presets.' });
   }
 
   const timings = await page.evaluate(async () => {

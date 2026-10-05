@@ -25,6 +25,16 @@ export function normalize(w: Weights): Weights {
   return Object.fromEntries(WEIGHT_KEYS.map((key, index) => [key, scaled[index] / total])) as unknown as Weights;
 }
 
+/** Set one weight and rescale only the other four so the dragged slider keeps its value; result sums to 1. */
+export function setWeight(w: Weights, key: keyof Weights, value: number): Weights {
+  const v = Math.min(1, Math.max(0, Number.isFinite(value) ? value : 0));
+  const others = WEIGHT_KEYS.filter((k) => k !== key);
+  const rest = others.reduce((sum, k) => sum + Math.max(0, w[k]), 0);
+  const out = { ...w, [key]: v } as Weights;
+  for (const k of others) out[k] = rest === 0 ? (1 - v) / others.length : (Math.max(0, w[k]) / rest) * (1 - v);
+  return out;
+}
+
 /** Return simulation results in descending score order; ties retain input order. */
 export function rank(
   results: readonly SimulationResult[] | Record<string, SimulationResult>,
