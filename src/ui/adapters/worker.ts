@@ -39,6 +39,8 @@ export function workerSim(): SimClient {
     .catch((e: Error) => readyReject(e));
 
   let candidates: Promise<Candidate[]> | null = null;
+  /** UI id → engine benchmark id; the engine keys loading points by its own ids. */
+  const engineIds = new Map<string, string>();
   const loadCandidates = () => (candidates ??= Promise.all([
     fixtureSim.candidates(),
     getJson<Candidate[]>('/data/benchmarks.json'),
@@ -46,6 +48,7 @@ export function workerSim(): SimClient {
     const byId = new Map(bench.map((b) => [b.id.toUpperCase(), b]));
     return list.map((c) => {
       const b = byId.get(c.id);
+      if (b) engineIds.set(c.id, b.id);
       return b ? { ...c, polygon: b.polygon, areaM2: b.areaM2 } : c;
     });
   }));
@@ -61,10 +64,12 @@ export function workerSim(): SimClient {
         mitigations: mitigations.map((m) => toMitigation(m, site)).filter((m) => m !== null),
       };
       const id = nextId++;
-      return new Promise<SimulationResult>((resolve, reject) => {
+      const candidate = { ...site, id: engineIds.get(site.id) ?? site.id };
+      const result = await new Promise<SimulationResult>((resolve, reject) => {
         pending.set(id, { resolve, reject });
-        worker.postMessage({ type: 'run', id, candidate: site, opts } satisfies WorkerRequest);
+        worker.postMessage({ type: 'run', id, candidate, opts } satisfies WorkerRequest);
       });
+      return { ...result, candidateId: site.id };
     },
   };
 }
