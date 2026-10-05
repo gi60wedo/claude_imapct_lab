@@ -52,6 +52,59 @@ def height_of(tags):
     return 9
 
 
+def assemble_rings(segments):
+    """Join open way segments (lists of (lon, lat)) end to end into closed rings."""
+    segs = [list(s) for s in segments if len(s) >= 2]
+    rings = []
+    while segs:
+        ring = segs.pop()
+        while ring[0] != ring[-1]:
+            for i, s in enumerate(segs):
+                if s[0] == ring[-1]:
+                    ring += s[1:]
+                elif s[-1] == ring[-1]:
+                    ring += s[::-1][1:]
+                elif s[-1] == ring[0]:
+                    ring = s[:-1] + ring
+                elif s[0] == ring[0]:
+                    ring = s[::-1][:-1] + ring
+                else:
+                    continue
+                del segs[i]
+                break
+            else:
+                break  # cannot close: drop the fragment
+        if ring[0] == ring[-1] and len(ring) >= 4:
+            rings.append(ring)
+    return rings
+
+
+def point_in_ring(ring, x, y):
+    hit = False
+    for (x1, y1), (x2, y2) in zip(ring, ring[1:]):
+        if (y1 > y) != (y2 > y) and x < (x2 - x1) * (y - y1) / (y2 - y1) + x1:
+            hit = not hit
+    return hit
+
+
+def relation_buildings(rel):
+    """Return [{"polygon", "holes"?, "h"}] for a building multipolygon relation."""
+    def ways(role):
+        return [[(r6(p["lon"]), r6(p["lat"])) for p in m["geometry"]]
+                for m in rel.get("members", [])
+                if m["type"] == "way" and m["role"] == role and m.get("geometry")]
+    outers, inners = assemble_rings(ways("outer")), assemble_rings(ways("inner"))
+    h = height_of(rel["tags"])
+    result = []
+    for outer in outers:
+        holes = [i for i in inners if point_in_ring(outer, *i[0])]
+        b = {"polygon": [list(p) for p in outer], "h": h}
+        if holes:
+            b["holes"] = [[list(p) for p in i] for i in holes]
+        result.append(b)
+    return result
+
+
 def main():
     OUT.mkdir(parents=True, exist_ok=True)
     process_images(ROOT / "datasets" / "dop20", "*.jpg", "dop20.json")
@@ -64,6 +117,10 @@ def main():
         tags = el.get("tags", {})
         if el["type"] == "node" and tags.get("barrier") == "bollard":
             bollards.append([r6(el["lon"]), r6(el["lat"])])
+        elif el["type"] == "way" and tags.get("barrier") == "bollard":
+            bollards.extend([r6(p["lon"]), r6(p["lat"])] for p in el.get("geometry", []))
+        elif el["type"] == "relation" and "building" in tags:
+            buildings.extend(relation_buildings(el))
         elif el["type"] == "way" and el.get("geometry"):
             pts = [[r6(p["lon"]), r6(p["lat"])] for p in el["geometry"]]
             if len(pts) < 3 and "building" in tags:
@@ -72,6 +129,7 @@ def main():
                 buildings.append({"polygon": pts, "h": height_of(tags)})
             elif tags.get("highway") in foot_types and len(pts) >= 2:
                 footways.append(pts)
+    bollards = [list(p) for p in dict.fromkeys(tuple(b) for b in bollards)]
     for name, data in [("buildings-osm", buildings), ("bollards", bollards), ("footways", footways)]:
         (OUT / f"{name}.json").write_text(json.dumps(data, separators=(",", ":")))
         print(f"{name}.json: {len(data)}")
