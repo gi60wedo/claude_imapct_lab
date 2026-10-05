@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>UrbanTwin: Market-Sim — Project Overview</title>
+<style>
+  :root {
+    --bg: #f7f6f2; --card: #ffffff; --ink: #1d2433; --muted: #5b6475; --line: #e3e1d9;
+    --accent: #2f5bd3; --accent-soft: #e8eefc;
+    --senior: #8a4fd8; --vendor: #e07a1f; --commuter: #2f86d3; --retail: #2e9e6a;
+    --warn: #c0392b;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #12151c; --card: #1a1f2a; --ink: #e8eaf0; --muted: #9aa3b5; --line: #2a3140;
+      --accent: #7da0ff; --accent-soft: #1f2a44;
+      --senior: #b48cf0; --vendor: #f0a050; --commuter: #6fb2ef; --retail: #5cc792; --warn: #ef6f60;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 16px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 1040px; margin: 0 auto; padding: 0 24px 80px; }
+  header.hero { padding: 64px 0 32px; }
+  .eyebrow { color: var(--accent); font-weight: 600; letter-spacing: .06em; text-transform: uppercase; font-size: 13px; }
+  h1 { font-size: clamp(32px, 5vw, 48px); line-height: 1.1; margin: 8px 0 16px; }
+  h2 { font-size: 26px; margin: 56px 0 8px; }
+  h3 { font-size: 18px; margin: 0 0 6px; }
+  p.lead { font-size: 19px; color: var(--muted); max-width: 760px; }
+  .rule { margin-top: 24px; padding: 16px 20px; border-left: 4px solid var(--accent);
+          background: var(--accent-soft); border-radius: 8px; max-width: 760px; }
+  .section-sub { color: var(--muted); margin: 0 0 24px; max-width: 760px; }
+  .grid { display: grid; gap: 16px; }
+  .g2 { grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
+  .g3 { grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
+  .g4 { grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 20px; }
+  .card p { margin: 0; color: var(--muted); font-size: 15px; }
+  .persona { border-top: 4px solid var(--c); }
+  .persona .tag { display: inline-block; font-size: 12px; font-weight: 600; color: var(--c);
+                  margin-bottom: 6px; text-transform: uppercase; letter-spacing: .05em; }
+  .persona ul { margin: 10px 0 0; padding-left: 18px; color: var(--muted); font-size: 14px; }
+  .pipeline { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; counter-reset: step; }
+  .step { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 14px; position: relative; }
+  .step::before { counter-increment: step; content: counter(step);
+                  display: inline-grid; place-items: center; width: 26px; height: 26px; border-radius: 50%;
+                  background: var(--accent); color: #fff; font-weight: 700; font-size: 13px; margin-bottom: 8px; }
+  .step b { display: block; }
+  .step span { color: var(--muted); font-size: 13px; }
+  .loop { margin-top: 12px; color: var(--muted); font-size: 14px; }
+  table { width: 100%; border-collapse: collapse; background: var(--card); border: 1px solid var(--line);
+          border-radius: 12px; overflow: hidden; font-size: 15px; }
+  th, td { padding: 10px 14px; text-align: left; border-bottom: 1px solid var(--line); }
+  th { font-size: 13px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+  tr:last-child td { border-bottom: none; }
+  td.num { font-variant-numeric: tabular-nums; }
+  .bar { display: flex; align-items: center; gap: 8px; }
+  .bar i { display: block; height: 8px; border-radius: 4px; background: var(--c); }
+  .bar.low i { background: var(--warn); }
+  code, .mono { font-family: ui-monospace, "Cascadia Code", Consolas, monospace; font-size: 14px; }
+  .formula { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 18px 20px;
+             font-family: ui-monospace, Consolas, monospace; font-size: 15px; overflow-x: auto; }
+  .arch { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+  .arch .card h3 { font-size: 15px; }
+  .arch .where { font-size: 12px; color: var(--accent); font-family: ui-monospace, Consolas, monospace; }
+  .note { font-size: 13px; color: var(--muted); margin-top: 8px; }
+  footer { margin-top: 64px; padding-top: 24px; border-top: 1px solid var(--line); color: var(--muted); font-size: 13px; }
+</style>
+</head>
+<body>
+<main>
+
+<header class="hero">
+  <div class="eyebrow">Track 2 · Fraunhofer IIS Challenge · Claude Impact Lab #2, Nürnberg</div>
+  <h1>UrbanTwin: Market-Sim</h1>
+  <p class="lead">
+    Nuremberg's weekly vegetable market has to leave the Hauptmarkt. UrbanTwin is a digital twin of the
+    Altstadt that simulates a full market Saturday at every candidate site, shows exactly who wins and who
+    loses, and lets Claude explain the trade-offs and propose fixes that the engine re-tests.
+  </p>
+  <div class="rule">
+    <b>Rule zero:</b> every number on screen is computed by the engine from real Nuremberg data.
+    Claude explains and proposes. It never invents a number, and the server rejects any brief that does.
+  </div>
+</header>
+
+<!-- WHAT -->
+<section>
+  <h2>What it does</h2>
+  <p class="section-sub">A site decision that would normally take surveys and years of debate becomes something a planner can explore in seconds.</p>
+  <div class="grid g3">
+    <div class="card"><h3>🔎 Finds candidate sites</h3><p>Scans the inner city for squares, pedestrian areas and vacant ground floors, alongside the three organizer sites: Hauptmarkt, St. Lorenzkirche and the former Kaufhof.</p></div>
+    <div class="card"><h3>🚫 Filters with reasons</h3><p>Rejects sites that are too small, too far from transit, or unreachable by delivery vans, and shows each rejection on the map with its reason.</p></div>
+    <div class="card"><h3>🚶 Simulates a Saturday</h3><p>Seniors, vendors, commuters, tourists and vans move through the real street network from 05:30 to 15:00 in 30-second ticks.</p></div>
+    <div class="card"><h3>⚖️ Scores fairly</h3><p>A weighted MarketScore ranks sites, but four persona scores always sit beside it, so a high total can't hide a group that loses.</p></div>
+    <div class="card"><h3>🤖 Explains with Claude</h3><p>Claude writes a council brief, a first-person verdict for each persona, and mitigations such as express kiosks or delivery windows.</p></div>
+    <div class="card"><h3>🌧️ Asks “what if?”</h3><p>Switch to a rainy Saturday, a Christmas market that blocks the Hauptmarkt, or different city priorities, and the ranking updates live.</p></div>
+  </div>
+</section>
+
+<!-- WHO -->
+<section>
+  <h2>Who it is for</h2>
+  <p class="section-sub">
+    The <b>primary users</b> are city planners and the market organizers who must pick and defend a new site
+    in front of the city council. The tool is built around the <b>people affected</b> by that choice,
+    modeled as four personas drawn from census and timetable data.
+  </p>
+  <div class="grid g4">
+    <div class="card persona" style="--c: var(--senior)">
+      <span class="tag">Senior</span><h3>👵 Oma Helga, 78</h3>
+      <p>Uses a rollator and takes the U-Bahn.</p>
+      <ul><li>Steps without an elevator block her</li><li>Cobblestones and slopes cost extra</li><li>Walking budget about 250 m</li></ul>
+    </div>
+    <div class="card persona" style="--c: var(--vendor)">
+      <span class="tag">Vendor</span><h3>🚚 Markus, 45</h3>
+      <p>Arrives in a 3.5 t Sprinter at 05:30 with 40 crates.</p>
+      <ul><li>Needs a legal van route to a loading point within 80 m</li><li>Bollards and pedestrian zones block him</li><li>Unloading must finish by 07:00</li></ul>
+    </div>
+    <div class="card persona" style="--c: var(--commuter)">
+      <span class="tag">Commuter</span><h3>💼 Lukas, 29</h3>
+      <p>Office worker with a 30-minute lunch break.</p>
+      <ul><li>The round trip from the U-Bahn exit must fit his break</li><li>Otherwise he doesn't go</li></ul>
+    </div>
+    <div class="card persona" style="--c: var(--retail)">
+      <span class="tag">Retailer</span><h3>🛍️ Frau Weber, 52</h3>
+      <p>Owns a boutique nearby.</p>
+      <ul><li>Gains from extra footfall past her shop</li><li>Loses from blocked windows and produce waste</li></ul>
+    </div>
+  </div>
+  <p class="note">The persona mix isn't made up: the senior share comes from the Zensus 2022 65+ grid around each site, and commuter waves come from the VGN timetable.</p>
+</section>
+
+<!-- HOW -->
+<section>
+  <h2>How it works</h2>
+  <p class="section-sub">An eight-step pipeline. Steps 1–6 are deterministic code; Claude only enters at step 7.</p>
+  <div class="pipeline">
+    <div class="step"><b>Discover</b><span>Squares, pedestrian areas and vacant ground floors from OSM and LoD2</span></div>
+    <div class="step"><b>Filter</b><span>Space, transit and delivery access, each with a stated reason</span></div>
+    <div class="step"><b>Rank</b><span>Indicator score, then a shortlist plus the benchmarks</span></div>
+    <div class="step"><b>Simulate</b><span>Seeded persona agents in a Web Worker</span></div>
+    <div class="step"><b>Visualize</b><span>3D map with agent trails, heatmap and bottlenecks</span></div>
+    <div class="step"><b>Score</b><span>MarketScore and per-persona scores</span></div>
+    <div class="step"><b>Recommend</b><span>Claude writes the brief, verdicts and mitigations</span></div>
+    <div class="step"><b>What-if</b><span>Rain, Christmas market, or new weights</span></div>
+  </div>
+  <p class="loop">↺ <b>Propose → simulate → judge:</b> when Claude proposes a mitigation, the engine re-runs the day with it applied, and the personas judge the new result.</p>
+
+  <h3 style="margin-top:32px">Inside the simulation</h3>
+  <div class="grid g2" style="margin-top:12px">
+    <div class="card">
+      <p><b style="color:var(--ink)">Routing.</b> Each agent takes the cheapest path through the real street graph, using a cost function for its persona:</p>
+      <div class="formula" style="margin-top:12px">cost = length × M_surface × M_slope × M_rain</div>
+      <p style="margin-top:12px">Cobblestones count ×2.5 for seniors, and steps without an elevator are impassable for them. Rain adds ×1.3 on open streets. Vans may only use vehicle-legal roads and are stopped by bollards.</p>
+    </div>
+    <div class="card">
+      <p><b style="color:var(--ink)">Why rule-based movement?</b> Research shows LLM-generated mobility can look plausible but fail to match real movement statistics. So agents move by seeded, testable rules. The same seed always gives the same result, and one site × scenario runs in under 0.25 s.</p>
+      <p style="margin-top:12px"><b style="color:var(--ink)">Where Claude fits.</b> One Claude call per persona, not per agent, turns that persona's computed metrics into a verdict. A forced tool schema shapes the brief, and a number check rejects any figure that isn't in the engine output.</p>
+    </div>
+  </div>
+
+  <h3 style="margin-top:32px">Scoring</h3>
+  <div class="formula" style="margin-top:12px">
+    MarketScore = 0.30·Accessibility + 0.25·Footfall + 0.20·Fairness + 0.15·LocalBusiness + 0.10·Walkability
+  </div>
+  <p class="note">These are the default weights; planners can adjust them or pick a preset (Accessibility first, Trader fairness first, Local business first). Fairness = 100 × (1 − Gini of visitors per stall). <b>Guard:</b> any site where a persona scores below 40 is flagged “fails a stakeholder group”, whatever its total.</p>
+
+  <h3 style="margin-top:32px">Example output</h3>
+  <p class="section-sub" style="margin-bottom:12px">Persona scores from <code>npm run sim:report</code> (sunny Saturday, seed 42), as recorded in the project README. Each site wins for someone and costs someone else.</p>
+  <table>
+    <thead><tr><th>Persona</th><th>Hauptmarkt</th><th>Lorenzkirche</th><th>Kaufhof</th></tr></thead>
+    <tbody>
+      <tr><td>👵 Senior</td>
+        <td class="num"><div class="bar" style="--c:var(--senior)"><i style="width:100px"></i>100</div></td>
+        <td class="num"><div class="bar" style="--c:var(--senior)"><i style="width:100px"></i>100</div></td>
+        <td class="num"><div class="bar" style="--c:var(--senior)"><i style="width:87px"></i>86.9</div></td></tr>
+      <tr><td>🚚 Vendor</td>
+        <td class="num"><div class="bar" style="--c:var(--vendor)"><i style="width:95px"></i>95.4</div></td>
+        <td class="num"><div class="bar" style="--c:var(--vendor)"><i style="width:67px"></i>66.9</div></td>
+        <td class="num"><div class="bar" style="--c:var(--vendor)"><i style="width:98px"></i>97.8</div></td></tr>
+      <tr><td>💼 Commuter</td>
+        <td class="num"><div class="bar" style="--c:var(--commuter)"><i style="width:71px"></i>71.4</div></td>
+        <td class="num"><div class="bar" style="--c:var(--commuter)"><i style="width:91px"></i>91.0</div></td>
+        <td class="num"><div class="bar" style="--c:var(--commuter)"><i style="width:57px"></i>56.8</div></td></tr>
+      <tr><td>🛍️ Retailer</td>
+        <td class="num"><div class="bar" style="--c:var(--retail)"><i style="width:60px"></i>59.9</div></td>
+        <td class="num"><div class="bar" style="--c:var(--retail)"><i style="width:61px"></i>61.2</div></td>
+        <td class="num"><div class="bar" style="--c:var(--retail)"><i style="width:70px"></i>70.4</div></td></tr>
+    </tbody>
+  </table>
+  <p class="note">Values depend on the data and model version. Run the report yourself for current numbers.</p>
+</section>
+
+<!-- ARCH -->
+<section>
+  <h2>Architecture</h2>
+  <p class="section-sub">Everything except the Claude call runs in the browser, so the demo works offline using cached briefs.</p>
+  <div class="arch">
+    <div class="card"><div class="where">prep/</div><h3>Geodata prep (Python)</h3><p>Converts OSM, LoD2, DGM1, Zensus and GTFS into compact JSON: candidates, street graph, population, arrivals.</p></div>
+    <div class="card"><div class="where">src/rank/</div><h3>Discovery &amp; ranking</h3><p>Filters candidates with reasons and ranks them by indicator score.</p></div>
+    <div class="card"><div class="where">src/sim/</div><h3>Pedestrian &amp; delivery twin</h3><p>Seeded Monte Carlo agents, Dijkstra routing and 30 s ticks, running in a Web Worker.</p></div>
+    <div class="card"><div class="where">src/score/</div><h3>Scoring</h3><p>MarketScore, the fairness Gini and the stakeholder guard.</p></div>
+    <div class="card"><div class="where">src/ui/</div><h3>Map &amp; cockpit</h3><p>React with deck.gl on MapLibre: 3D buildings, trips, heatmap, ranking sliders, what-if bar, persona cards.</p></div>
+    <div class="card"><div class="where">server/</div><h3>Claude brief server</h3><p>Calls <code>claude-sonnet-5-5</code> with the API key kept server-side, checks numbers against the engine output, and caches briefs.</p></div>
+  </div>
+</section>
+
+<!-- DATA -->
+<section>
+  <h2>Real, open data</h2>
+  <table>
+    <thead><tr><th>Dataset</th><th>Used for</th></tr></thead>
+    <tbody>
+      <tr><td>OpenStreetMap Altstadt extract</td><td>Candidates, walk and drive graph, bollards, steps, U-Bahn entrances, elevators, shops</td></tr>
+      <tr><td>LoD2 CityGML (LDBV)</td><td>Building footprints and heights, free area, 3D view</td></tr>
+      <tr><td>DGM1 1 m terrain</td><td>Slope per street segment</td></tr>
+      <tr><td>DOP20 aerial photo + ALKIS parcels</td><td>Base map and checking site outlines</td></tr>
+      <tr><td>Zensus 2022 100 m grid</td><td>Population, share aged 65+, average age</td></tr>
+      <tr><td>VGN GTFS timetable</td><td>Stop frequency and U-Bahn arrival waves</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- RUN -->
+<section>
+  <h2>Try it</h2>
+  <div class="formula">
+    npm install<br>
+    npm run dev          <span style="color:var(--muted)"># the app (Vite)</span><br>
+    npm run server       <span style="color:var(--muted)"># Claude brief server (needs ANTHROPIC_API_KEY in .env)</span><br>
+    npm test             <span style="color:var(--muted)"># unit and integration tests</span><br>
+    npm run sim:report   <span style="color:var(--muted)"># 3 benchmark sites × 3 scenarios as a table</span>
+  </div>
+  <p class="note">Requires Node 22.18+. The full plan is in <code>IMPLEMENTATION_PLAN.md</code>.</p>
+</section>
+
+<footer>
+  Data credits: Datenquelle: Bayerische Vermessungsverwaltung – www.geodaten.bayern.de, CC BY 4.0 ·
+  © OpenStreetMap contributors, ODbL · Statistisches Bundesamt (Destatis), Zensus 2022, dl-de/by-2-0 ·
+  VGN Verkehrsverbund Großraum Nürnberg, open data.
+</footer>
+
+</main>
+</body>
+</html>

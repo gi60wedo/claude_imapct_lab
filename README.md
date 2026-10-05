@@ -6,7 +6,7 @@ Nuremberg's vegetable market has to leave the **Hauptmarkt**. UrbanTwin is a dig
 
 > **Rule zero:** every number comes from the engine and real Nuremberg data. Claude explains results but never invents a number.
 
-The full plan is in [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md). A printable version is in [`docs/UrbanTwin_Group_Plan.pdf`](docs/UrbanTwin_Group_Plan.pdf).
+For a one-page visual explainer of what the project does, who it's for and how it works, open [`docs/PROJECT_OVERVIEW.html`](docs/PROJECT_OVERVIEW.html) in a browser. The full plan is in [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md). A printable version is in [`docs/UrbanTwin_Group_Plan.pdf`](docs/UrbanTwin_Group_Plan.pdf).
 
 ---
 
