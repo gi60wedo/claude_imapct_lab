@@ -16,11 +16,12 @@ const OFFLINE_MSG = 'scenario not available offline';
 export default function WhatIfBar() {
   const scenario = useStore((s) => s.scenario);
   const compareIds = useStore((s) => s.compareIds);
+  const ready = useStore((s) => !s.loading && s.candidates.length > 0);
   const [running, setRunning] = useState<Scenario | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   async function choose(next: Scenario) {
-    if (running) return;
+    if (running || !ready) return;
     setError(null);
     setRunning(next);
     try {
@@ -55,7 +56,7 @@ export default function WhatIfBar() {
         <button
           key={s.id}
           type="button"
-          disabled={running !== null}
+          disabled={running !== null || !ready}
           aria-pressed={scenario === s.id}
           onClick={() => choose(s.id)}
           className={`flex items-center gap-1 rounded border px-3 py-1 text-sm disabled:opacity-50 ${
