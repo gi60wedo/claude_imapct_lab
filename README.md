@@ -10,22 +10,22 @@ For a one-page visual explainer of what the project does, who it's for and how i
 
 ---
 
-## Status of this branch (`feature_v`)
+## Status
 
 | Part | Owner | Status |
 |---|---|---|
 | `datasets/`: raw open data | A | ✅ in repo |
 | `src/contracts.ts`: shared types (§5) | all | ✅ |
-| `src/sim/`: pedestrian & delivery twin | **B** | ✅ runs on real data, 25 tests passing |
-| `prep/`, `src/rank/`: discovery & ranking | A | ⏳ |
-| `src/ui/`: map, ranking, cockpit | C | ⏳ |
-| `src/score/`, `server/brief.ts`: scoring & Claude | D | ⏳ |
+| `src/sim/`: pedestrian & delivery twin | B | ✅ runs on real data with DGM1 slope and the LoD2 Kaufhof footprint |
+| `prep/`, `src/rank/`: discovery & ranking | A | ✅ |
+| `src/ui/`: map, ranking, cockpit | C | ✅ |
+| `src/score/`, `server/brief.ts`: scoring & Claude | D | ✅ |
 
 ---
 
 ## Quick start
 
-Requires Node 20+ and `unzip` on the PATH, which is only needed to re-extract GTFS.
+Requires Node 22.18+ and `unzip` on the PATH, which is only needed to re-extract GTFS.
 
 ```bash
 npm install
@@ -38,10 +38,10 @@ Example output of `npm run sim:report` (sunny Saturday, seed 42):
 
 ```
                      Hauptmarkt   Lorenzkirche   Kaufhof
-👵 Senior               100          100          86.9
-🚚 Vendor               95.4         66.9         97.8
-💼 Commuter             71.4         91.0         56.8
-🛍️ Retailer             59.9         61.2         70.4
+👵 Senior               100          100          70.4
+🚚 Vendor               92.6          5.0         61.0
+💼 Commuter             71.4         91.0         73.8
+🛍️ Retailer             59.2         54.1         64.2
 ```
 
 ---
@@ -85,10 +85,8 @@ claude_imapct_lab/
 
 ## Known open points
 
-- **Kaufhof footprint** in `src/sim/dev/benchmarks.ts` is approximate. A will replace it with the LoD2 outline.
-- **Slope** comes only from OSM `incline` tags. A will add per-edge slope from DGM1.
-- **Lorenzkirche delivery:** OSM shows a legal van route via Adlerstraße. The tags need checking before the pitch.
-- **`package.json`** is minimal (TypeScript, Vitest, tsx) and needs merging with C's Vite scaffold.
+- **Lorenzkirche delivery:** the engine finds the nearest vehicle-legal road 94 m from the stalls (limit 80 m), so vendors score 5. OSM also shows a van route via Adlerstraße. Check those tags on site before the pitch.
+- **Kaufhof seniors:** the nearest step-free stop or elevator is about 390 m from the LoD2 footprint. The store's own elevators aren't in OSM, so this may understate senior access.
 
 ---
 

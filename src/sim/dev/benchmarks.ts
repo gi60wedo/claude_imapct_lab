@@ -9,13 +9,13 @@ const emptyIndicators: Candidate['indicators'] = {
 };
 
 /** Explicit development loading locations, supplementary to OSM loading tags.
- * Coordinates use street-side graph nodes; the Kaufhof footprint remains approximate.
+ * Coordinates use street-side graph nodes.
  */
 export const BENCHMARK_LOADING_POINTS: NonNullable<World['loadingPoints']> = {
   // Existing market delivery access at the square's north-west Waaggasse edge.
   hauptmarkt: [[11.0768662, 49.454408]],
-  // Rear dock access via Peuntgasse, behind the store rather than its Königstraße frontage.
-  kaufhof: [[11.0805479, 49.4489816]],
+  // A's van stop from prep/candidates.py: 48 m from the store, reached via motor_vehicle=destination streets.
+  kaufhof: [[11.0793681, 49.4493313]],
   // No designated unloading inside the pedestrian plaza behind the bollards.
   lorenzkirche: [],
 };
@@ -35,9 +35,11 @@ export function benchmarkCandidates(world: World): Candidate[] {
       [11.0775, 49.4505], [11.0800, 49.4505], [11.0800, 49.45078], [11.07795, 49.45078],
       [11.07795, 49.4515], [11.0775, 49.4515],
     ]),
-    // TODO(A): approximate footprint around the plan's 49.4490, 11.0800. Replace with the LoD2 outline.
+    // OSM way 144721687 (old_name=Galeria Kaufhof, Königstraße 42-52), matching A's LoD2 footprint in candidates.json.
+    // The plan's 49.4490, 11.0800 pointed at apartment buildings south-east of the store.
     candidate('kaufhof', 'Former Kaufhof (ground floor)', 'ground_floor', [
-      [11.079516, 49.448798], [11.080484, 49.448798], [11.080484, 49.449202], [11.079516, 49.449202],
+      [11.078527, 49.45011], [11.078572, 49.450053], [11.078889, 49.449651], [11.078941, 49.449585],
+      [11.077974, 49.44939], [11.077965, 49.449455], [11.077889, 49.44997], [11.077882, 49.450019],
     ]),
   ];
 }

@@ -27,9 +27,10 @@ const result = twin.run(candidate, { scenario: 'RAINY_SAT', seed: 42, mitigation
 { kind: 'stall_layout', layout: 'loop' | 'cluster' }   // loop spreads visitors → fairness
 ```
 
-**A (prep):** the engine reads a `World` (`world.ts`): graph nodes and edges with `walk`, `vehicle`, `oneway`, `steps`, `surface`, `sheltered`, `slope` and `widthM`, plus POIs, Zensus cells and GTFS station arrivals. `dev/osmWorld.ts` builds the same shape from `datasets/` and documents the OSM rules. The main gaps for `prep/` to fill:
-- `slope` comes only from OSM `incline` tags. Replace it with DGM1 slope per edge.
-- The Kaufhof polygon in `dev/benchmarks.ts` is approximate. Replace it with the LoD2 outline.
+**A (prep):** the engine reads a `World` (`world.ts`): graph nodes and edges with `walk`, `vehicle`, `oneway`, `steps`, `surface`, `sheltered`, `slope` and `widthM`, plus POIs, Zensus cells and GTFS station arrivals. `dev/osmWorld.ts` builds the same shape from `datasets/` and documents the OSM rules. It takes each edge's slope
+from A's DGM1 grade in `public/data/graph.json`, matched by OSM node pair, and falls back to the OSM `incline` tag
+when that file is missing. The Kaufhof polygon in `dev/benchmarks.ts` is the LoD2 footprint of OSM way 144721687.
+After changing either, run `npm run sim:export-world` so the browser's `world.json` and `benchmarks.json` follow.
 
 Candidates with an entry in `World.loadingPoints` use only tagged graph nodes with `loadingPoint: true`
 and their listed locations. An empty entry still requires designated unloading. Candidates without
@@ -37,7 +38,7 @@ an entry use a single nearest vehicle-legal node within 80 m of the stalls as th
 point. Listed coordinates snap to vehicle-legal nodes within 60 m and require a carry of at most 80 m.
 The dev importer recognizes OSM node tags `loading=yes/designated`,
 `amenity=loading_dock`, `parking=loading`, and `parking_space=loading`. `dev/benchmarks.ts` supplies
-Hauptmarkt's existing Waaggasse market access and Kaufhof's rear Peuntgasse dock access. Lorenzkirche
+Hauptmarkt's existing Waaggasse market access and A's Kaufhof van stop on Königstraße (a 42 m carry). Lorenzkirche
 has no loading fixture and its closest road approach requires a 94 m carry. A loading-point mitigation
 adds a usable unloading destination even if its snapped node was not previously designated. The
 engine uses the same random stream across mitigations to make routing comparisons reproducible.

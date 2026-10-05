@@ -1,6 +1,6 @@
 // Dev-only: builds a World straight from datasets/ so B can run on real Nuremberg data before A's
-// prep/ outputs exist. A's graph.json should match these rules (or improve them, e.g. DGM1 slope).
-import { readFileSync } from 'node:fs';
+// prep/ outputs exist. When A's graph.json is present, its DGM1 slope per edge replaces the OSM incline tags.
+import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { centroid, distanceToPolygon, haversineM, LocalProjection, segmentWithinPolygon } from '../geo';
 import type { GraphEdge, GraphNode, LngLat, PopulationCell, StationArrivals, Surface, World } from '../world';
@@ -10,6 +10,8 @@ export const REPO = resolve(import.meta.dirname, '../../..');
 const OSM_PATH = resolve(REPO, 'datasets/osm/altstadt.json');
 const ZENSUS_DIR = resolve(REPO, 'datasets/zensus');
 export const STATIONS_PATH = resolve(import.meta.dirname, 'data/stations.dev.json');
+/** A's prep/graph.py output. Optional: without it, slope falls back to OSM incline tags. */
+export const PREP_GRAPH_PATH = resolve(REPO, 'public/data/graph.json');
 export const WORLD_DATA_PATHS = [OSM_PATH, STATIONS_PATH,
   resolve(ZENSUS_DIR, 'nuernberg_population_100m.csv'), resolve(ZENSUS_DIR, 'nuernberg_share_65plus_100m.csv')];
 
@@ -74,9 +76,25 @@ function surfaceOf(t: Record<string, string>): Surface {
   return 'smooth';
 }
 
+/** Fallback slope from the OSM incline tag, for edges A's DGM1 graph doesn't cover. */
 function slopeOf(t: Record<string, string>): number {
   const m = t.incline?.match(/^-?(\d+(?:\.\d+)?)\s*%$/);
-  return m ? +m[1] / 100 : 0;   // TODO(A): replace with DGM1 slope per edge
+  return m ? +m[1] / 100 : 0;
+}
+
+const pairKey = (a: number, b: number) => (a < b ? `${a}-${b}` : `${b}-${a}`);
+
+/** DGM1 grade per OSM node pair from A's graph.json (prep/graph.py), or an empty map if prep hasn't run. */
+export function loadTerrainSlopes(path = PREP_GRAPH_PATH): Map<string, number> {
+  const slopes = new Map<string, number>();
+  if (!existsSync(path)) return slopes;
+  const g: { nodes: { osm?: number }[]; edges: { a: number; b: number; slope: number }[] } =
+    JSON.parse(readFileSync(path, 'utf8'));
+  for (const e of g.edges) {
+    const a = g.nodes[e.a]?.osm, b = g.nodes[e.b]?.osm;
+    if (a !== undefined && b !== undefined && Number.isFinite(e.slope)) slopes.set(pairKey(a, b), e.slope);
+  }
+  return slopes;
 }
 
 function widthOf(t: Record<string, string>): number {
@@ -108,6 +126,7 @@ export function buildOsmWorld(): World {
     return i;
   };
 
+  const terrainSlopes = loadTerrainSlopes();
   const edges: GraphEdge[] = [];
   let virtualId = -1;
   for (const w of osm.elements) {
@@ -127,7 +146,8 @@ export function buildOsmWorld(): World {
     for (let k = 0; k + 1 < ids.length; k++) {
       const [a, b] = reversed ? [ids[k + 1], ids[k]] : [ids[k], ids[k + 1]];
       if (a === b) continue;
-      edges.push({ a, b, lengthM: haversineM(nodes[a].lng, nodes[a].lat, nodes[b].lng, nodes[b].lat), ...base });
+      const slope = terrainSlopes.get(pairKey(w.nodes[k], w.nodes[k + 1])) ?? base.slope;
+      edges.push({ a, b, lengthM: haversineM(nodes[a].lng, nodes[a].lat, nodes[b].lng, nodes[b].lat), ...base, slope });
     }
     // Area crossings must remain in the polygon, including on concave squares.
     const closed = w.nodes[0] === w.nodes[w.nodes.length - 1];

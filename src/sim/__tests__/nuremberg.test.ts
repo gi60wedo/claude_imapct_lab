@@ -70,10 +70,11 @@ describe.skipIf(!hasData)('Nuremberg benchmarks', () => {
     expect(lorenz.topFriction).toMatch(/94 m/);
     expect(vendor('hauptmarkt').score).toBeGreaterThan(60);
     for (const scenario of ['SUNNY_SAT', 'RAINY_SAT', 'CHRISTMAS_MARKET'] as Scenario[]) {
+      // A's van stop on Königstraße is a 42 m carry from the LoD2 footprint: usable, but not a rear dock.
       const kaufhof = vendor('kaufhof', scenario);
-      expect(kaufhof.score).toBeGreaterThan(80);
+      expect(kaufhof.score).toBeGreaterThan(50);
       expect(kaufhof.score).toBeGreaterThan(vendor('lorenzkirche', scenario).score + 30);
-      expect(kaufhof.topFriction).toMatch(/Peuntgasse/);
+      expect(kaufhof.topFriction).toMatch(/carry from the loading point on Königstraße/);
     }
   });
 

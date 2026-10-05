@@ -168,26 +168,26 @@
   <p class="note">These are the default weights; planners can adjust them or pick a preset (Accessibility first, Trader fairness first, Local business first). Fairness = 100 × (1 − Gini of visitors per stall). <b>Guard:</b> any site where a persona scores below 40 is flagged “fails a stakeholder group”, whatever its total.</p>
 
   <h3 style="margin-top:32px">Example output</h3>
-  <p class="section-sub" style="margin-bottom:12px">Persona scores from <code>npm run sim:report</code> (sunny Saturday, seed 42), as recorded in the project README. Each site wins for someone and costs someone else.</p>
+  <p class="section-sub" style="margin-bottom:12px">Persona scores from <code>npm run sim:report</code> (sunny Saturday, seed 42). Each site wins for someone and costs someone else. At Lorenzkirche the nearest legal van stop is 94 m from the stalls, beyond the 80 m limit, so vendors score 5.</p>
   <table>
     <thead><tr><th>Persona</th><th>Hauptmarkt</th><th>Lorenzkirche</th><th>Kaufhof</th></tr></thead>
     <tbody>
       <tr><td>👵 Senior</td>
         <td class="num"><div class="bar" style="--c:var(--senior)"><i style="width:100px"></i>100</div></td>
         <td class="num"><div class="bar" style="--c:var(--senior)"><i style="width:100px"></i>100</div></td>
-        <td class="num"><div class="bar" style="--c:var(--senior)"><i style="width:87px"></i>86.9</div></td></tr>
+        <td class="num"><div class="bar" style="--c:var(--senior)"><i style="width:70px"></i>70.4</div></td></tr>
       <tr><td>🚚 Vendor</td>
-        <td class="num"><div class="bar" style="--c:var(--vendor)"><i style="width:95px"></i>95.4</div></td>
-        <td class="num"><div class="bar" style="--c:var(--vendor)"><i style="width:67px"></i>66.9</div></td>
-        <td class="num"><div class="bar" style="--c:var(--vendor)"><i style="width:98px"></i>97.8</div></td></tr>
+        <td class="num"><div class="bar" style="--c:var(--vendor)"><i style="width:93px"></i>92.6</div></td>
+        <td class="num"><div class="bar low"><i style="width:5px"></i>5.0</div></td>
+        <td class="num"><div class="bar" style="--c:var(--vendor)"><i style="width:61px"></i>61.0</div></td></tr>
       <tr><td>💼 Commuter</td>
         <td class="num"><div class="bar" style="--c:var(--commuter)"><i style="width:71px"></i>71.4</div></td>
         <td class="num"><div class="bar" style="--c:var(--commuter)"><i style="width:91px"></i>91.0</div></td>
-        <td class="num"><div class="bar" style="--c:var(--commuter)"><i style="width:57px"></i>56.8</div></td></tr>
+        <td class="num"><div class="bar" style="--c:var(--commuter)"><i style="width:74px"></i>73.8</div></td></tr>
       <tr><td>🛍️ Retailer</td>
-        <td class="num"><div class="bar" style="--c:var(--retail)"><i style="width:60px"></i>59.9</div></td>
-        <td class="num"><div class="bar" style="--c:var(--retail)"><i style="width:61px"></i>61.2</div></td>
-        <td class="num"><div class="bar" style="--c:var(--retail)"><i style="width:70px"></i>70.4</div></td></tr>
+        <td class="num"><div class="bar" style="--c:var(--retail)"><i style="width:59px"></i>59.2</div></td>
+        <td class="num"><div class="bar" style="--c:var(--retail)"><i style="width:54px"></i>54.1</div></td>
+        <td class="num"><div class="bar" style="--c:var(--retail)"><i style="width:64px"></i>64.2</div></td></tr>
     </tbody>
   </table>
   <p class="note">Values depend on the data and model version. Run the report yourself for current numbers.</p>

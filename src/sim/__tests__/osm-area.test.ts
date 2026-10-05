@@ -11,6 +11,7 @@ vi.mock('../geo', async (importOriginal) => {
 afterEach(() => { fixture.rejectSpokes = false; });
 vi.mock('node:fs', async (importOriginal) => ({
   ...await importOriginal<typeof import('node:fs')>(),
+  existsSync: () => false,   // no prep graph.json: slope comes from the fixture's tags
   readFileSync: (file: string) => {
     if (file.endsWith('altstadt.json')) return fixture.osm;
     if (file.endsWith('stations.dev.json')) return '[]';
