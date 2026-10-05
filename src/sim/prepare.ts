@@ -14,7 +14,7 @@ export type VisitorKind = 'senior' | 'resident' | 'tourist' | 'commuter';
 export interface PoolAgent {
   kind: VisitorKind;
   node: number;            // where the trip starts (home, hotel, U-Bahn entrance)
-  arriveAt: number;        // preferred arrival time at the market, seconds after midnight
+  arriveAt: number;        // seconds after midnight: station-exit departure for commuters; preferred market arrival for others
   dwellSec: number;
   station?: string;        // commuters: which station's lunch crowd
   homeX: number; homeY: number;

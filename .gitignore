@@ -12,3 +12,9 @@ dist/
 
 # Generated sim viewer
 sim-viz/
+
+# Local configuration and browser test artifacts
+.env*
+test-results/
+playwright-report/
+e2e/__shots__/

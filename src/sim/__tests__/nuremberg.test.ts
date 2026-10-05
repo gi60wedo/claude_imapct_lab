@@ -1,13 +1,12 @@
 // Integration on the real datasets/ (OSM, Zensus, GTFS extract). Skipped if the data isn't checked out.
 import { existsSync } from 'node:fs';
-import { resolve } from 'node:path';
-import { describe, expect, it } from 'vitest';
-import type { Scenario } from '../../contracts';
+import { beforeAll, describe, expect, it } from 'vitest';
+import type { Candidate, Scenario } from '../../contracts';
 import { benchmarkCandidates } from '../dev/benchmarks';
-import { buildOsmWorld, laeaToWgs84, REPO, STATIONS_PATH, vanAllowed } from '../dev/osmWorld';
-import { createTwin } from '../index';
+import { buildOsmWorld, laeaToWgs84, WORLD_DATA_PATHS, vanAllowed } from '../dev/osmWorld';
+import { createTwin, type Twin, type World } from '../index';
 
-const hasData = existsSync(resolve(REPO, 'datasets/osm/altstadt.json')) && existsSync(STATIONS_PATH);
+const hasData = WORLD_DATA_PATHS.map((file) => existsSync(file)).every(Boolean);
 
 describe('osm rules', () => {
   it('reads delivery access from OSM tags at 05:30', () => {
@@ -26,10 +25,16 @@ describe('osm rules', () => {
 });
 
 describe.skipIf(!hasData)('Nuremberg benchmarks', () => {
-  const world = buildOsmWorld();
-  const twin = createTwin(world);
-  const sites = benchmarkCandidates(world);
-  const byId = Object.fromEntries(sites.map((s) => [s.id, s]));
+  let world: World;
+  let twin: Twin;
+  let sites: Candidate[];
+  let byId: Record<string, Candidate>;
+  beforeAll(() => {
+    world = buildOsmWorld();
+    twin = createTwin(world);
+    sites = benchmarkCandidates(world);
+    byId = Object.fromEntries(sites.map((s) => [s.id, s]));
+  });
 
   it('builds a connected Altstadt graph with real stations', () => {
     expect(world.graph.nodes.length).toBeGreaterThan(5000);
@@ -55,6 +60,21 @@ describe.skipIf(!hasData)('Nuremberg benchmarks', () => {
     const score = (id: string) => twin.run(byId[id], { scenario: 'SUNNY_SAT', seed: 42 }).personas.commuter.score;
     expect(score('lorenzkirche')).toBeGreaterThan(score('hauptmarkt'));
     expect(score('lorenzkirche')).toBeGreaterThan(score('kaufhof'));
+  });
+
+  it('keeps delivery access at Kaufhof (LoD2 footprint) and Hauptmarkt while Lorenzkirche requires a 94 m carry', () => {
+    const vendor = (id: string, scenario: Scenario = 'SUNNY_SAT') =>
+      twin.run(byId[id], { scenario, seed: 42 }).personas.vendor;
+    const lorenz = vendor('lorenzkirche');
+    expect(lorenz.score).toBeLessThan(10);
+    expect(lorenz.topFriction).toMatch(/94 m/);
+    expect(vendor('hauptmarkt').score).toBeGreaterThan(60);
+    for (const scenario of ['SUNNY_SAT', 'RAINY_SAT', 'CHRISTMAS_MARKET'] as Scenario[]) {
+      const kaufhof = vendor('kaufhof', scenario);
+      expect(kaufhof.score).toBeGreaterThan(50);   // real LoD2 footprint: nearest legal unloading point, no designated dock yet
+      expect(kaufhof.score).toBeGreaterThan(vendor('lorenzkirche', scenario).score + 30);
+      expect(kaufhof.topFriction).toMatch(/m carry/);
+    }
   });
 
   it('the Christkindlesmarkt closes the Hauptmarkt but not the alternatives', () => {

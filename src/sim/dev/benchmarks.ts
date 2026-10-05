@@ -8,6 +8,18 @@ const emptyIndicators: Candidate['indicators'] = {
   transitScore: 0, walkScore: 0, population800m: 0, retailPoi400m: 0, attractions400m: 0, deliveryAccess: false, vanDistM: 0,
 };
 
+/** Explicit development loading locations, supplementary to OSM loading tags.
+ * Coordinates use street-side graph nodes.
+ */
+export const BENCHMARK_LOADING_POINTS: NonNullable<World['loadingPoints']> = {
+  // Existing market delivery access at the square's north-west Waaggasse edge.
+  hauptmarkt: [[11.0768662, 49.454408]],
+  // Kaufhof: no entry. The Peuntgasse dock point was placed for the old approximate footprint and lies ~150 m
+  // from the LoD2 building (limit 80 m), so Kaufhof uses the baseline nearest vehicle-legal node until A confirms its dock.
+  // No designated unloading inside the pedestrian plaza behind the bollards.
+  lorenzkirche: [],
+};
+
 function candidate(id: string, name: string, kind: Candidate['kind'], polygon: [number, number][]): Candidate {
   const proj = new LocalProjection(polygon[0][0], polygon[0][1]);
   const areaM2 = Math.round(polygonArea(polygon.map(([lng, lat]) => proj.toXY(lng, lat))));

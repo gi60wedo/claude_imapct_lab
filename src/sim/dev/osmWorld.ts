@@ -2,14 +2,17 @@
 // prep/ outputs exist. A's graph.json should match these rules (or improve them, e.g. DGM1 slope).
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { haversineM } from '../geo';
+import { centroid, distanceToPolygon, haversineM, LocalProjection, segmentWithinPolygon } from '../geo';
 import type { GraphEdge, GraphNode, LngLat, PopulationCell, RoadCondition, StationArrivals, Surface, World } from '../world';
+import { BENCHMARK_LOADING_POINTS } from './benchmarks';
 
 export const REPO = resolve(import.meta.dirname, '../../..');
 const OSM_PATH = resolve(REPO, 'datasets/osm/altstadt.json');
 const ZENSUS_DIR = resolve(REPO, 'datasets/zensus');
 export const STATIONS_PATH = resolve(import.meta.dirname, 'data/stations.dev.json');
 export const ROAD_CONDITIONS_PATH = resolve(import.meta.dirname, 'data/road-conditions.dev.json');
+export const WORLD_DATA_PATHS = [OSM_PATH, STATIONS_PATH,
+  resolve(ZENSUS_DIR, 'nuernberg_population_100m.csv'), resolve(ZENSUS_DIR, 'nuernberg_share_65plus_100m.csv')];
 
 /** Altstadt bbox from datasets/README.md (WGS84). */
 export const BBOX = { minLat: 49.444, minLng: 11.065, maxLat: 49.461, maxLng: 11.092 };
@@ -101,6 +104,8 @@ export function buildOsmWorld(): World {
       if (t?.barrier === 'bollard') n.barrier = t.bollard === 'removable' || t.bollard === 'foldable' ? 'removable_bollard' : 'bollard';
       else if (t && ['gate', 'lift_gate', 'swing_gate', 'chain'].includes(t.barrier)) n.barrier = 'gate';
       if (t?.highway === 'elevator') n.elevator = true;
+      if (t && (['yes', 'designated'].includes(t.loading ?? '') || t.amenity === 'loading_dock' ||
+        t.parking === 'loading' || t.parking_space === 'loading')) n.loadingPoint = true;
       nodes.push(n);
     }
     return i;
@@ -127,15 +132,28 @@ export function buildOsmWorld(): World {
       if (a === b) continue;
       edges.push({ a, b, lengthM: haversineM(nodes[a].lng, nodes[a].lat, nodes[b].lng, nodes[b].lat), ...base });
     }
-    // Pedestrian areas (squares) can be crossed, not only walked around: add spokes to a centre node.
+    // Area crossings must remain in the polygon, including on concave squares.
     const closed = w.nodes[0] === w.nodes[w.nodes.length - 1];
     if (closed && (t.area === 'yes' || t.highway === 'pedestrian') && walk) {
       const ring = ids.slice(0, -1);
+      if (ring.length < 3) continue;
       const lng = ring.reduce((s, i) => s + nodes[i].lng, 0) / ring.length;
       const lat = ring.reduce((s, i) => s + nodes[i].lat, 0) / ring.length;
-      const c = nodeIndex(virtualId--, lat, lng);
-      for (const i of ring) {
-        edges.push({ a: i, b: c, lengthM: haversineM(nodes[i].lng, nodes[i].lat, lng, lat), ...base, vehicle: false, oneway: false, widthM: 6 });
+      const proj = new LocalProjection(lng, lat);
+      const poly = ring.map((i) => proj.toXY(nodes[i].lng, nodes[i].lat));
+      // If the arithmetic centre is outside, try local triangle centres until one is inside.
+      const centres = [centroid(poly), ...poly.map((p, k) => centroid([
+        poly[(k + poly.length - 1) % poly.length], p, poly[(k + 1) % poly.length],
+      ]))];
+      const centre = centres.find(([x, y]) => distanceToPolygon(x, y, poly) < 1e-7);
+      if (!centre) continue; // The perimeter still permits safe travel on a degenerate area.
+      const [cLng, cLat] = proj.toLngLat(...centre);
+      let c = -1;
+      for (let k = 0; k < ring.length; k++) {
+        if (!segmentWithinPolygon(poly[k], centre, poly)) continue;
+        if (c < 0) c = nodeIndex(virtualId--, cLat, cLng);
+        const i = ring[k];
+        edges.push({ a: i, b: c, lengthM: haversineM(nodes[i].lng, nodes[i].lat, cLng, cLat), ...base, vehicle: false, oneway: false, widthM: 6 });
       }
     }
   }
@@ -177,7 +195,8 @@ export function buildOsmWorld(): World {
     return best ? [{ ...en, station: best.name }] : [];
   });
 
-  return { graph: { nodes, edges }, pois, population: loadZensus(), stations, christmasMarket, roadConditions: loadRoadConditions() };
+  return { graph: { nodes, edges }, pois, population: loadZensus(), stations, christmasMarket,
+    loadingPoints: BENCHMARK_LOADING_POINTS, roadConditions: loadRoadConditions() };
 }
 
 /** Vans enter where major roads cross the study-area boundary; one entry per 300 m cluster. */

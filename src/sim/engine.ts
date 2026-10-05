@@ -52,7 +52,6 @@ export function simulate(pw: PreparedWorld, cand: Candidate, opts: SimOptions): 
   const scale = opts.scale ?? P.DEFAULT_SCALE;
   const up = 1 / scale;
   const g = pw.g;
-  const nodes = pw.world.graph.nodes;
   const edges = pw.world.graph.edges;
   const pool = scenarioPool(pw, scenario, seed, scale);
   const ctx = scenarioContext(pw, scenario, mitigations);
@@ -101,7 +100,7 @@ export function simulate(pw: PreparedWorld, cand: Candidate, opts: SimOptions): 
     if (leg.nodes.length === 0) return;
     const out = walkTrip(pw, ctx, leg.nodes, leg.edges, 0, senior);
     const travel = out.ts[out.ts.length - 1];
-    const depart = Math.max(P.MARKET_OPEN - 1800, arriveAt - travel);
+    const depart = kind === 'commuter' ? arriveAt : Math.max(P.MARKET_OPEN - 1800, arriveAt - travel);
     const trip: Trip = { kind, xs: [], ys: [], ts: [], seg: [] };
     appendShifted(trip, out, depart);
     const end = leg.nodes[leg.nodes.length - 1];
@@ -114,7 +113,7 @@ export function simulate(pw: PreparedWorld, cand: Candidate, opts: SimOptions): 
         pushPoint(trip, slots[s][0], slots[s][1], t, -1);
       }
     }
-    t += dwellSec / 5;
+    t += atKiosk ? dwellSec : dwellSec / 5;
     pushPoint(trip, g.x[end], g.y[end], t, -1);
     const back = walkTrip(pw, ctx, [...leg.nodes].reverse(), [...leg.edges].reverse(), 0, senior);
     appendShifted(trip, back, t);
@@ -148,7 +147,8 @@ export function simulate(pw: PreparedWorld, cand: Candidate, opts: SimOptions): 
       origin = a.node; d = homeCost; kiosk = viaKiosk; accessible = true;
     } else if (accessChoices.length) {
       const o = accessChoices[Math.floor(r() * accessChoices.length)];
-      origin = o.a; d = o.cost; kiosk = o.kiosk; accessible = transitWithinRadius;
+      origin = o.a; d = o.cost; kiosk = o.kiosk;
+      accessible = pathLength(pathFrom(kiosk ? spKioskSenior! : spSenior, origin).edges) <= P.SENIOR_TRANSIT_RADIUS_M;
     }
     if (!accessible) seniorNoAccess++;
     if (origin < 0 || (!siteAvailable && !kiosk)) continue;
@@ -233,7 +233,7 @@ export function simulate(pw: PreparedWorld, cand: Candidate, opts: SimOptions): 
   }
 
   // ── Vendors (Markus) ─────────────────────────────────────────────────────────
-  const vendor = simulateVans(pw, ctx, mitigations, poly, cx, cy, reach, siteAvailable, slots.length, trips, rng);
+  const vendor = simulateVans(pw, ctx, mitigations, cand.id, poly, cx, cy, reach, siteAvailable, slots.length, trips, rng);
 
   // ── Ticks: heat, crowding, elevators ─────────────────────────────────────────
   const ticks = runTicks(pw, trips, up);
@@ -388,7 +388,7 @@ function chooseStalls(r: Rng, slots: [number, number][], x: number, y: number, l
 
 // ── Vans ───────────────────────────────────────────────────────────────────────
 
-function simulateVans(pw: PreparedWorld, ctx: CostContext, mitigations: Mitigation[], poly: [number, number][],
+function simulateVans(pw: PreparedWorld, ctx: CostContext, mitigations: Mitigation[], candidateId: string, poly: [number, number][],
                       cx: number, cy: number, reach: number, siteAvailable: boolean, stalls: number,
                       trips: Trip[], rng: Rng) {
   const g = pw.g;
@@ -398,12 +398,22 @@ function simulateVans(pw: PreparedWorld, ctx: CostContext, mitigations: Mitigati
   const bottlenecks: Bottleneck[] = [];
   const distPoly = (i: number) => distanceToPolygon(g.x[i], g.y[i], poly);
 
-  const loading = g.nodesWithin(cx, cy, reach + P.VENDOR_MAX_CARRY_M, (i) => pw.isVanNode(i) && distPoly(i) <= P.VENDOR_MAX_CARRY_M);
+  // A loadingPoints entry restricts unloading to designated points; without one, the single
+  // vehicle-legal node nearest the stalls serves as the baseline loading point.
+  const designatedOnly = Object.hasOwn(pw.world.loadingPoints ?? {}, candidateId);
+  const nearby = g.nodesWithin(cx, cy, reach + P.VENDOR_MAX_CARRY_M,
+    (i) => (!designatedOnly || nodes[i].loadingPoint === true) && pw.isVanNode(i) && distPoly(i) <= P.VENDOR_MAX_CARRY_M);
+  const loading = designatedOnly || nearby.length === 0 ? nearby
+    : [nearby.reduce((b, i) => (distPoly(i) < distPoly(b) ? i : b))];
+  const addLoadingPoint = (lng: number, lat: number) => {
+    const [x, y] = pw.proj.toXY(lng, lat);
+    const i = g.nearest(x, y, 60, pw.isVanNode);
+    if (i >= 0 && distPoly(i) <= P.VENDOR_MAX_CARRY_M && !loading.includes(i)) loading.push(i);
+  };
+  for (const [lng, lat] of pw.world.loadingPoints?.[candidateId] ?? []) addLoadingPoint(lng, lat);
   for (const m of mitigations) {
     if (m.kind !== 'loading_point') continue;
-    const [x, y] = pw.proj.toXY(m.lng, m.lat);
-    const i = g.nearest(x, y, 60, pw.isVanNode);
-    if (i >= 0 && distPoly(i) <= P.VENDOR_MAX_CARRY_M) loading.push(i);
+    addLoadingPoint(m.lng, m.lat);
   }
   const fail = (friction: string) => ({ score: 5, served: 0, total, friction, bottlenecks });
   if (!siteAvailable) return fail('Christkindlesmarkt occupies the site');
@@ -411,8 +421,12 @@ function simulateVans(pw: PreparedWorld, ctx: CostContext, mitigations: Mitigati
 
   if (loading.length === 0) {
     const nearest = g.nearest(cx, cy, 1000, pw.isVanNode);
-    const d = nearest >= 0 ? Math.round(distPoly(nearest)) : NaN;
-    return fail(`nearest vehicle-legal road is ${d} m from the stalls (limit ${P.VENDOR_MAX_CARRY_M} m)`);
+    if (nearest < 0) return fail('no vehicle-legal road within 1000 m of the site');
+    const d = Math.round(distPoly(nearest));
+    if (d > P.VENDOR_MAX_CARRY_M) {
+      return fail(`nearest vehicle-legal road is ${d} m from the stalls (limit ${P.VENDOR_MAX_CARRY_M} m)`);
+    }
+    return fail(`no designated loading point within ${P.VENDOR_MAX_CARRY_M} m of the stalls (nearest vehicle-legal road ${d} m)`);
   }
 
   const sp = shortestPathsTo(g, loading, 'van', ctx, { sourceCost: loading.map((i) => 3 * distPoly(i)) });
@@ -682,4 +696,3 @@ function topCobble(pw: PreparedWorld, legs: number[][]): string | null {
   for (const [name, n] of byName) if (n > bestN) { best = name; bestN = n; }
   return best && bestN / Math.max(1, legs.length) >= 0.2 ? `cobblestones on ${best}` : null;
 }
-
