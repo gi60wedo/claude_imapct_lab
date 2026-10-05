@@ -16,6 +16,8 @@ const twin = createTwin(world);                        // index the graph once
 const result = twin.run(candidate, { scenario: 'RAINY_SAT', seed: 42, mitigations: [...] });   // SimulationResult
 ```
 
+`opts.scale` sets the share of modelled people simulated as agents for one run (default 0.25, results scaled back up). `opts.maxTrips` caps the returned trails (default 100: vans, seniors and lunch commuters first, then a seeded shuffle of the rest); pass `Infinity` for every agent. `KIND_PERSONA` in `engine.ts` maps each agent kind (senior, vendor, commuter, resident, tourist, passer) to a contract persona. The live view runs scale 1 with every agent (about 7,500–8,300 trails on a benchmark site).
+
 **C (UI):** use `worker.ts`. Post `{ type: 'init', world }` once, then `{ type: 'run', id, candidate, opts }`. Replies are `{ type: 'result', id, result, ms }`.
 
 **D (Claude):** `propose_mitigation` should return a `Mitigation` from `world.ts`. Pass it in `opts.mitigations`, rerun, and compare. The engine echoes each mitigation's `label` in `result.mitigations`.

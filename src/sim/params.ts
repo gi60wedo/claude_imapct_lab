@@ -66,6 +66,7 @@ export const SHOP_PASS_RADIUS_M = 25;          // a visitor this close walks pas
 export const CROWD_DENSITY_FULL = 1.0;         // persons/m² treated as severity 1
 export const MIN_EDGE_AREA_M = 10;             // shortest edge length used for density
 export const HEAT_CELL_M = 15;
+export const TRAIL_TOLERANCE_M = 1;          // returned trails drop vertices an agent passes within 1 m of on time
 export const ELEVATOR_CAPACITY_5MIN = 15;      // rollator users one cabin moves in 5 min
 
 // Criteria normalisation (D normalises across sites again in score.ts)

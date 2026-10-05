@@ -4,7 +4,8 @@ import { simulate, describeMitigation, type SimOptions } from './engine';
 import { prepareWorld } from './prepare';
 import type { World } from './world';
 
-export type { SimOptions } from './engine';
+export type { SimOptions, TripKind } from './engine';
+export { KIND_PERSONA } from './engine';
 export type { Mitigation, World, SimGraph, GraphNode, GraphEdge, Pois, PopulationCell, StationArrivals } from './world';
 export { gini } from './metrics';
 export { describeMitigation };
