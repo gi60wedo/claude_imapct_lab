@@ -85,12 +85,20 @@ export interface CandidateEvidence {
   vanBlockers?: VanBlocker[];
   manualExclusion?: string;       // from prep/sites.json deny list
   note?: string;
+  // prep/approaches.py
+  stepFreeArrival?: Record<string, StepFreeArrival | null>;  // keyed by time, "07:30" (opening) and "11:30" (peak)
+  climbHomeM?: number;            // population-weighted climb on the way home, residents in 8 directions within 1.5 km
+  residentsStepFreeShare?: number;
+  rainCover?: { site: 'indoor' | 'open'; approachShelterShare: number };
 }
+
+export interface StepFreeArrival { station: string; fromPlatform: boolean; walkM: number }
 
 export interface CandidatesFile {
   meta: { sources: string[]; referenceDay: string; deliveryTime: string;
           van: { heightM: number; widthM: number; weightT: number };
           definitions: Record<string, string>;
+          focus?: { sites: string[]; baseline?: string };   // organisers' options + today's site
           rank?: { thresholds: unknown; weights: unknown; shortlist: string[] } };
   candidates: Candidate[];
 }
@@ -121,6 +129,8 @@ export interface GraphEdge {
   level?: 'underground' | 'bridge';
   vanRoad?: true;                 // physically drivable (legal or not)
   vanRestrictions?: string[];     // why a vanRoad edge is not vehicleAllowed
+  openingHours?: string;          // only usable then, e.g. "Mo-Sa 09:30-20:00" (Galeria lift)
+  override?: string; source?: string;   // edge added in prep/sites.json graphOverrides, with its source
 }
 
 export interface GraphFile { meta: Record<string, string>; nodes: GraphNode[]; edges: GraphEdge[] }
@@ -147,6 +157,39 @@ export interface ArrivalsFile { source: string; date: string; weekday: string; n
 export interface BuildingsFile {
   source: string; fields: string;
   buildings: { id: string; h: number | null; z: number | null; polygon: LngLat[] }[];
+}
+
+export interface RouteSummary {
+  lengthM: number; walkMin: number; seniorMin: number;
+  climbToSiteM: number; climbReturnM: number;          // climb walking there / walking home
+  maxGradePct: number; over6pctM: number;
+  cobbleShare: number; shelterShare: number; litShare: number;
+  badSurfaceM: number; narrowM: number;                // OSM smoothness bad or worse / width < 1.5 m
+  steps: number; stepCount: number; crossings: number; raisedKerbs: number;
+  steepest: { where: string; gradePct: number }[];
+  lifts: { name: string; openingHours?: string }[];   // time-limited connections used
+  surfaces: Record<string, number>;                    // metres per surface
+  profile: [number, number][];                         // [distance m, terrain z]
+  path: ([number, number] | [number, number, number])[];   // [lng, lat, z?] origin -> site
+}
+
+export interface Approach {
+  type: 'transit' | 'residents'; label: string; weight: number;   // weight = departures or residents
+  station?: string; sector?: string;
+  shortest: RouteSummary;
+  senior: Record<string, RouteSummary | null>;         // by time; null = no step-free route
+}
+
+export interface ApproachesFile {
+  meta: { times: Record<string, string>; walkSpeedMs: number; seniorSpeedMs: number;
+          focus: string[]; baseline: string; routes: string };
+  sites: { id: string; name: string; origins: Approach[] }[];
+}
+
+export interface PreferenceFile {
+  focus: [string, string]; fields: string[]; note: string;
+  summary: { residents: number } & Record<'walk' | 'senior', Record<string, { residents: number; share: number }>>;
+  cells: [number, number, number, number | null, number | null, number | null, number | null][];
 }
 
 export interface ImageryFile {

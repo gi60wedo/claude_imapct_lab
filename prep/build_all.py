@@ -1,6 +1,7 @@
 """Runs the whole Part A prep pipeline in dependency order. From the repo root: npm run prep"""
 import time
 
+import approaches
 import candidates
 import graph
 import imagery
@@ -8,7 +9,7 @@ import lod2
 import population
 import transit
 
-STEPS = [lod2, graph, population, transit, imagery, candidates]  # candidates needs all the others
+STEPS = [lod2, graph, population, transit, imagery, candidates, approaches]  # each needs the ones before it
 
 if __name__ == "__main__":
     t0 = time.time()

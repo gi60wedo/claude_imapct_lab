@@ -65,8 +65,21 @@ export function rankCandidates(candidates: Candidate[], opts: RankOptions = {}):
     .sort((a, b) => (a.quickRank ?? Infinity) - (b.quickRank ?? Infinity) || a.id.localeCompare(b.id));
 }
 
-/** Top `n` passing discovered sites plus every benchmark (pass or fail), in rank order. */
-export function shortlist(ranked: Candidate[], n = 3): Candidate[] {
+export interface Focus { sites: string[]; baseline?: string }
+
+/**
+ * The sites that get simulated. With a focus (the organisers' options + today's site as baseline) exactly those,
+ * in that order; otherwise the top `n` passing discovered sites plus every benchmark (pass or fail), in rank order.
+ */
+export function shortlist(ranked: Candidate[], n = 3, focus?: Focus): Candidate[] {
+  if (focus) {
+    const ids = [...focus.sites, ...(focus.baseline ? [focus.baseline] : [])];
+    return ids.map(id => {
+      const c = ranked.find(r => r.id === id);
+      if (!c) throw new Error(`focus site "${id}" is not in the candidate list`);
+      return c;
+    });
+  }
   const top = ranked.filter(c => c.passedFilter && c.kind !== 'benchmark').slice(0, n);
   const benches = ranked.filter(c => c.kind === 'benchmark');
   return [...top, ...benches].sort((a, b) => (a.quickRank ?? Infinity) - (b.quickRank ?? Infinity));

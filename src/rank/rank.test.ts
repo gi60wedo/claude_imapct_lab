@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import type { Candidate, CandidatesFile } from '../contracts.ts';
+import type { ApproachesFile, Candidate, CandidatesFile, GraphFile, PreferenceFile } from '../contracts.ts';
 import { DEFAULT_THRESHOLDS, quickScores, rankCandidates, rejectReasons, shortlist } from './index.ts';
 
 function cand(id: string, over: Partial<Candidate> = {}, ind: Partial<Candidate['indicators']> = {},
@@ -91,6 +91,12 @@ describe('rankCandidates', () => {
     const s = shortlist(rankCandidates(pool), 1);
     expect(s.map(c => c.id)).toEqual(['b', 'bench']);
   });
+
+  it('with a focus, shortlists exactly the focus sites then the baseline, whatever their rank', () => {
+    const s = shortlist(rankCandidates(pool), 3, { sites: ['bench', 'a'], baseline: 'small' });
+    expect(s.map(c => c.id)).toEqual(['bench', 'a', 'small']);
+    expect(() => shortlist(rankCandidates(pool), 3, { sites: ['nope'] })).toThrow(/nope/);
+  });
 });
 
 describe('public/data/candidates.json (real Nuremberg data)', () => {
@@ -128,11 +134,59 @@ describe('public/data/candidates.json (real Nuremberg data)', () => {
     }
   });
 
+  it('focuses on the two relocation options with Hauptmarkt as the baseline', () => {
+    expect(file.meta.focus).toEqual({ sites: ['lorenzkirche', 'kaufhof'], baseline: 'hauptmarkt' });
+    expect(file.meta.rank?.shortlist).toEqual(['lorenzkirche', 'kaufhof', 'hauptmarkt']);
+  });
+
+  it('has approach indicators for every candidate', () => {
+    for (const c of file.candidates) {
+      const ev = c.evidence!;
+      expect(Object.keys(ev.stepFreeArrival!)).toEqual(['07:30', '11:30']);
+      expect(ev.climbHomeM).toBeGreaterThanOrEqual(0);
+      expect(ev.rainCover!.site).toBe(ev.baseKind === 'ground_floor' ? 'indoor' : 'open');
+    }
+  });
+
   it('uses the corrected former-Kaufhof footprint (OSM way 144721687, Königstraße 42-52)', () => {
     const k = byId.get('kaufhof')!;
     expect(k.evidence!.osm).toContain('way/144721687');
     const [lng, lat] = k.evidence!.centroid;
     expect(lat).toBeCloseTo(49.4498, 3);
     expect(lng).toBeCloseTo(11.0783, 3);
+  });
+});
+
+describe('approaches, preference and graph overrides (real data)', () => {
+  const read = <T,>(f: string): T => JSON.parse(readFileSync(new URL(`../../public/data/${f}`, import.meta.url), 'utf8'));
+  const ap = read<ApproachesFile>('approaches.json');
+  const pref = read<PreferenceFile>('preference.json');
+  const graph = read<GraphFile>('graph.json');
+
+  it('routes every focus site from stations and from all 8 resident directions', () => {
+    expect(ap.sites.map(s => s.id)).toEqual(['lorenzkirche', 'kaufhof', 'hauptmarkt']);
+    for (const s of ap.sites) {
+      expect(s.origins.filter(o => o.type === 'transit').length).toBeGreaterThanOrEqual(1);
+      expect(s.origins.filter(o => o.type === 'residents').map(o => o.sector))
+        .toEqual(['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW']);
+      for (const o of s.origins) expect(o.shortest.path.length).toBeGreaterThanOrEqual(1);
+    }
+  });
+
+  it('the Galeria lift is a sourced, time-limited edge that only helps once Galeria is open', () => {
+    const lift = graph.edges.find(e => e.override === 'galeria-lift-lorenzkirche')!;
+    expect(lift.openingHours).toBe('Mo-Sa 09:30-20:00');
+    expect(lift.source).toMatch(/VAG/);
+    const ev = read<CandidatesFile>('candidates.json').candidates.find(c => c.id === 'lorenzkirche')!.evidence!;
+    expect(ev.stepFreeArrival!['07:30']!.station).not.toBe('Lorenzkirche');
+    expect(ev.stepFreeArrival!['11:30']!.station).toBe('Lorenzkirche');
+  });
+
+  it('preference shares add up to all residents counted', () => {
+    for (const mode of ['walk', 'senior'] as const) {
+      const sum = Object.values(pref.summary[mode]).reduce((s, v) => s + v.residents, 0);
+      expect(sum).toBe(pref.summary.residents);
+    }
+    expect(pref.cells.reduce((s, c) => s + c[2], 0)).toBe(pref.summary.residents);
   });
 });

@@ -8,8 +8,13 @@ git lfs pull          # LoD2 CityGML (~525 MB) is stored in Git LFS
 npm install
 npm run prep          # full rebuild from raw data (~45 s), then applies src/rank
 npm run rank:bake     # re-apply filter + ranking only (after changing thresholds or weights)
-npm test              # vitest: src/rank unit tests + checks on the real candidates.json
+npm run figures       # slide figures -> docs/figures/ (3D close-up, elevation profiles, preference map)
+npm test              # vitest: src/rank unit tests + checks on the real data files
 ```
+
+**Focus.** `sites.json` sets `focus` = the organisers' two options (`lorenzkirche`, `kaufhof`) and
+`baseline` = `hauptmarkt` (today's site). The shortlist that gets simulated is exactly these three. Discovered sites
+stay in `candidates.json` as context for the map.
 
 Python dependencies come from `prep/pyproject.toml` through `uv`. Nothing is installed globally.
 Individual steps: `cd prep && uv run python graph.py` (or `lod2`, `population`, `transit`, `imagery`, `candidates`).
@@ -25,6 +30,8 @@ Individual steps: `cd prep && uv run python graph.py` (or `lod2`, `population`, 
 | `population.json` | 1,847 Zensus 100 m cells (pop, share 65+, average age) around the Altstadt | B (resident origins) |
 | `arrivals.json` | 72 stations with every Saturday arrival time per mode (GTFS) | B (commuter waves) |
 | `buildings.json` | 9,680 LoD2 footprints with height and ground elevation | C (3D extrusion) |
+| `approaches.json` | the 3 focus sites: routes from the nearest stations (U-Bahn from the platform) and from residents in 8 directions; shortest + senior route at 07:30 and 11:30, each with surface, cobbles, grade, climb there/home, steps, kerbs, lighting, shelter, profile and path | B, C (route layers), D (persona verdicts) |
+| `preference.json` | every Zensus cell within 1.5 km: walk distance and senior effort to Lorenzkirche vs Kaufhof (heat map) | C, D |
 | `imagery.json` + `imagery/` | DOP20 aerial photo (0.5 m/px) and ALKIS parcel tiles with BitmapLayer corner bounds | C (base map) |
 
 ## Method (all numbers computed, no hand-entered values)
@@ -68,6 +75,33 @@ The quick score is 0.30 transit + 0.20 population + 0.20 retail + 0.10 attractio
 (area saturates at 3,000 m²). Counts are min–max normalised over the passing sites. The shortlist is the top 3
 discovered sites plus all benchmarks.
 
+**Approaches (`approaches.py`).** Dijkstra runs outward from each site once per cost function:
+- walking distance;
+- senior effort at 07:30 and at 11:30: no steps, `len × (2.5 on cobbles else 1.1) × (1 + 8·max(0, grade − 6 %))`.
+
+Edges with `openingHours` count only while open. Every candidate gets these evidence fields: `stepFreeArrival`,
+`climbHomeM`, `residentsStepFreeShare` and `rainCover`. The preference map routes every Zensus cell to each
+option's centre (`siteNode`).
+
+**Graph overrides (`sites.json` → `graphOverrides`).** Lorenzkirche station has stairs and escalators only between
+passage and street. VAG's notice of 27.01.2025 says: *"Der Aufzug fährt allerdings nur zwischen Bahnsteig und
+Passage."* Step-free street access exists only through the Galeria lift during Galeria opening hours (OSM:
+Mo–Sa 09:30–20:00), and the works run until the end of 2027. This is modelled as one sourced edge,
+station lift ↔ Galeria's Königstraße door, usable only during those hours.
+
+## Lorenzkirche vs. former Kaufhof (the two options)
+
+| | Lorenzkirche plaza | Former Kaufhof |
+|---|---|---|
+| Step-free arrival at 07:30 (Galeria closed) | Marientor stop, 314 m | Hbf platform, 335 m |
+| Step-free arrival at 11:30 (Galeria open) | Lorenzkirche station via Galeria lift, 106 m | the same, 249 m |
+| Residents' climb home / step-free share | 17 m / 91 % | 12 m / 100 % |
+| Cobbles / mean grade within 300 m | 21 % / 2.2 % | 11 % / 1.1 % |
+| Rain | open | indoor |
+| Van stop (legal 05:30) | 58 m to the edge, 150 m to the centre | 48 m to the building |
+| Residents for whom it is preferable: walking | **52 %** | 46 % |
+| Residents for whom it is preferable: senior effort | 16 % | **77 %** |
+
 ## Findings the team should know
 
 - **Lorenzkirche passes the delivery filter.** A legal van route (Marientor → Lorenzer Straße) reaches a stop
@@ -77,8 +111,10 @@ discovered sites plus all benchmarks.
 - 29 of 36 sites pass. Most Altstadt plazas touch a street that is legal for `destination` traffic at 05:30, so
   the filter rejects 7 sites, not "most of them": 6 are too small (Burghof also has no van access), and
   Willy-Prölß-Platz has no road within 80 m.
-- Shortlist: Kornmarkt, City Point (vacant mall, 5,688 m²) and Hallplatz (directly behind the Kaufhof), plus
-  Hauptmarkt, Lorenzkirche and Kaufhof.
+- Among the discovered sites, the quick ranking puts Kornmarkt, City Point (vacant mall, 5,688 m²) and Hallplatz
+  (14 m behind the Kaufhof) on top. They are kept as map context; the simulation focuses on the two options.
+- Commuters: Lorenzkirche station has one exit on the plaza and another 15 m from the Kaufhof. The walk differs by
+  about 1 minute (2.4 vs 3.4 min from the platform).
 
 ## Known limitations
 

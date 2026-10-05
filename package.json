@@ -8,6 +8,7 @@
   "scripts": {
     "prep": "uv run --project prep python prep/build_all.py && npm run rank:bake",
     "rank:bake": "node src/rank/bake.ts",
+    "figures": "uv run --project prep python prep/figures.py",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "video": "node video/record.ts"

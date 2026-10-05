@@ -9,7 +9,7 @@ const dataDir = fileURLToPath(new URL('../../public/data/', import.meta.url));
 const file: CandidatesFile = JSON.parse(readFileSync(dataDir + 'candidates.json', 'utf8'));
 
 const ranked = rankCandidates(file.candidates);
-const short = shortlist(ranked);
+const short = shortlist(ranked, 3, file.meta.focus);
 file.candidates = ranked;
 file.meta.rank = { thresholds: DEFAULT_THRESHOLDS, weights: DEFAULT_QUICK_WEIGHTS, shortlist: short.map(c => c.id) };
 

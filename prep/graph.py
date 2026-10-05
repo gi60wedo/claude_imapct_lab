@@ -5,6 +5,7 @@ persona cost functions need (steps, surface, shelter, slope) and the 3.5 t van r
 (vehicleAllowed, oneway, plus the reasons a road is closed to the van in `vanRestrictions`).
 """
 import glob
+import json
 import math
 import os
 import re
@@ -14,7 +15,7 @@ import numpy as np
 import rasterio
 from shapely.geometry import Polygon
 
-from common import (DATA, DELIVERY_TIME, REF_DATE, VAN, conditional_value, osm_elements, parse_num,
+from common import (DATA, DELIVERY_TIME, REF_DATE, ROOT, VAN, conditional_value, osm_elements, parse_num,
                     tags, to_utm, to_wgs, write_json)
 
 FOOT_HW = {"footway", "path", "pedestrian", "steps", "living_street", "residential", "service", "unclassified",
@@ -344,6 +345,23 @@ def build():
             if k in n:
                 rec[k] = n[k]
         out_nodes.append(rec)
+
+    # sourced connections OSM cannot express (prep/sites.json graphOverrides)
+    with open(os.path.join(ROOT, "prep", "sites.json"), encoding="utf-8") as f:
+        overrides = json.load(f).get("graphOverrides", [])
+    by_osm = {n["osm"]: i for i, n in enumerate(nodes)}
+    for o in overrides:
+        a, b = by_osm.get(o["from"]), by_osm.get(o["to"])
+        if a is None or b is None:
+            raise ValueError(f"graph override {o['id']}: OSM node not in graph")
+        na, nb = nodes[a], nodes[b]
+        rec = {"a": a, "b": b, "len": round(math.hypot(nb["x"] - na["x"], nb["y"] - na["y"]), 2), "foot": True,
+               "vehicleAllowed": False, "slope": 0.0, "rise": 0.0, "way": 0, "hw": o["hw"], "sheltered": True,
+               "name": o["name"], "override": o["id"], "source": o["source"]}
+        if o.get("openingHours"):
+            rec["openingHours"] = o["openingHours"]
+        out_edges.append(rec)
+        print(f"  override {o['id']}: node {o['from']} <-> {o['to']} ({rec['len']} m, {o.get('openingHours', 'always')})")
 
     print(f"  {len(out_nodes)} nodes, {stats['edges']} edges ({stats['foot']} walkable, {stats['van']} van-legal), "
           f"{stats['hubs']} square hubs, {sum('vanBlock' in n for n in out_nodes)} van-blocking barrier nodes, "

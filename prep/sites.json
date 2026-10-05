@@ -26,5 +26,21 @@
     }
   ],
   "deny": {},
-  "minGroundFloorM2": 300
+  "minGroundFloorM2": 300,
+  "_focusDoc": "The organisers' two relocation options are simulated; the current site is kept as the 'today' baseline. Discovered sites stay in candidates.json as context.",
+  "focus": ["lorenzkirche", "kaufhof"],
+  "baseline": "hauptmarkt",
+  "_overridesDoc": "Graph edges that OSM cannot express. Each needs a source. openingHours uses the OSM opening_hours subset (e.g. 'Mo-Sa 09:30-20:00').",
+  "graphOverrides": [
+    {
+      "id": "galeria-lift-lorenzkirche",
+      "from": 4330689591,
+      "to": 1501810657,
+      "hw": "elevator",
+      "name": "Passage -> Galeria lift -> Königstraße (Lorenzkirche station)",
+      "modelling": "from = top of the station lift (platform <-> passage, OSM node 4330689591); to = Galeria's Königstraße door. OSM does not map the passage-to-Galeria link, and the passage ramp to Königstraße (node 312496655) is closed during the works",
+      "openingHours": "Mo-Sa 09:30-20:00",
+      "source": "VAG notice 27.01.2025 'Lorenzer Passage: Bauarbeiten gehen in die nächste Runde': the station lift only runs platform <-> passage; step-free street access only via the Galeria lift during Galeria opening hours (OSM node 792628472 opening_hours=Mo-Sa 09:30-20:00); renovation until end of 2027"
+    }
+  ]
 }
