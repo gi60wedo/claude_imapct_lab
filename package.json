@@ -5,12 +5,14 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "server": "tsx server/index.ts",
     "build": "tsc -b && vite build",
     "test": "vitest",
     "e2e": "playwright test",
     "typecheck": "tsc -b --noEmit"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.131.0",
     "@deck.gl/aggregation-layers": "9.4.0",
     "@deck.gl/core": "9.4.0",
     "@deck.gl/extensions": "9.4.0",

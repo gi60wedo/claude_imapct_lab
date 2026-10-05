@@ -12,6 +12,7 @@ dist/
 
 # Local configuration and browser test artifacts
 .env*
+!.env.example
 test-results/
 playwright-report/
 e2e/__shots__/
