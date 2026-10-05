@@ -1,18 +1,12 @@
-import { Component, Suspense, lazy, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { Component, useEffect, useMemo, useState, type ReactNode } from 'react';
 import type { TimeSlice } from '../../contracts';
 import { getState, setState, useStore } from '../state/store';
+import CityThree, { type CameraMode } from '../three/CityThree';
 import { bootDashboard } from './boot';
-import type { CameraMode, CityThreeComponent } from './cityThreeTypes';
 import { CameraSwitch, CandidateList, ProfileCard, TimeBar, TopBar } from './left';
 import { rankCandidates, resultsFor, sliceWindow } from './model';
 import { Constraints, PersonaCards, ScoreCard, StallGrid } from './right';
 import { Card } from './ui';
-
-// The 3D agent owns src/ui/three/CityThree.tsx. The glob resolves to its real default export
-// when the file exists and to nothing otherwise, so the dashboard builds either way.
-const cityThreeModules = import.meta.glob<{ default: CityThreeComponent }>('../three/CityThree.tsx');
-const loadCityThree = cityThreeModules['../three/CityThree.tsx'];
-const CityThree = loadCityThree ? lazy(loadCityThree) : null;
 
 /** Wall-clock seconds one pass through a slice window takes while playing. */
 const LOOP_SEC = 30;
@@ -84,27 +78,24 @@ export default function Dashboard() {
           <main className="relative min-h-0 overflow-hidden" data-slot="city">
             <div className="absolute inset-0">
               <ViewBoundary>
-                {CityThree ? (
-                  <Suspense fallback={<div className="grid h-full place-items-center text-sm text-muted">Loading city…</div>}>
-                    <CityThree cameraMode={cameraMode} heatmap={heatmap} selectedId={selectedId}
-                      candidates={listed} result={result} timeSec={timeSec} onSelect={select} />
-                  </Suspense>
-                ) : (
-                  <div className="grid h-full place-items-center text-sm text-muted">City view not built yet: src/ui/three/CityThree.tsx is missing</div>
-                )}
+                <CityThree cameraMode={cameraMode} heatmap={heatmap} selectedId={selectedId}
+                  candidates={listed} result={result} timeSec={timeSec} slice={slice} onSelect={select} />
               </ViewBoundary>
             </div>
+            {/* The top row takes the height the profile card and time bar leave; the candidate
+                list shrinks into it and scrolls, so the overlay never overflows the city view. */}
             <div className="pointer-events-none absolute inset-0 flex flex-col gap-3 p-4">
-              <div className="flex items-start gap-4">
-                <div className="pointer-events-auto">
+              <div className="flex min-h-0 flex-1 gap-4">
+                <div className="flex min-h-0 flex-col">
                   <CandidateList ranked={ranked} selectedId={selectedId} brief={brief} scenario={scenario} onSelect={select} />
                 </div>
-                <div className="pointer-events-auto mx-auto">
-                  <CameraSwitch mode={cameraMode} heatmap={heatmap} onMode={setCameraMode} onHeatmap={() => setHeatmap((h) => !h)} />
+                <div className="flex flex-1 flex-col items-center gap-3">
+                  <div className="pointer-events-auto">
+                    <CameraSwitch mode={cameraMode} heatmap={heatmap} onMode={setCameraMode} onHeatmap={() => setHeatmap((h) => !h)} />
+                  </div>
+                  {loading && <Card className="pointer-events-auto px-4 py-2 text-sm text-cyan-300">Running the engine…</Card>}
                 </div>
               </div>
-              {loading && <Card className="pointer-events-auto self-center px-4 py-2 text-sm text-cyan-300">Running the engine…</Card>}
-              <div className="flex-1" />
               <div className="pointer-events-auto self-start"><ProfileCard candidate={candidate} result={result} /></div>
               <div className="pointer-events-auto">
                 <TimeBar slice={slice} timeSec={timeSec} playing={playing} result={result}

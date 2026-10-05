@@ -165,3 +165,24 @@ export function sampleTrip(path: readonly TripPoint[], time: number): TripPoint 
   return { x: a.x + (b.x - a.x) * alpha, y: a.y + (b.y - a.y) * alpha,
     z: a.z + (b.z - a.z) * alpha, time };
 }
+
+/**
+ * Unit (east, north) axis of steepest terrain rise across a point, sampled `step` metres to each
+ * side. A side elevation looks perpendicular to it, so the slope shows in profile. The axis always
+ * points east-ish, so the viewer faces north-ish; flat ground falls back to due east.
+ */
+export function slopeAxis(point: LngLat, raster: ElevationRaster, frame: LocalFrame, step = 40): [number, number] {
+  const [lng, lat] = point;
+  const dLng = step / frame.eastPerDegree, dLat = step / frame.northPerDegree;
+  const east = sampleElevation(lng + dLng, lat, raster) - sampleElevation(lng - dLng, lat, raster);
+  const north = sampleElevation(lng, lat + dLat, raster) - sampleElevation(lng, lat - dLat, raster);
+  const length = Math.hypot(east, north);
+  if (!(length > 1e-3)) return [1, 0];
+  const sign = east < 0 || (east === 0 && north < 0) ? -1 : 1;
+  return [(sign * east) / length, (sign * north) / length];
+}
+
+/** Viewing direction (east, north) for a viewer whose screen-right runs along `axis`. */
+export function facing([east, north]: readonly [number, number]): [number, number] {
+  return [-north, east];
+}

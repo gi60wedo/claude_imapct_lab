@@ -96,9 +96,11 @@ export function PersonaCards({ result }: { result: SimulationResult | null }) {
               <div className="mt-1 text-sm text-muted">
                 {p.who} · served <B k={`result.personas.${p.id}.served`}>{r?.served}</B> · dropped <B k={`result.personas.${p.id}.droppedOut`}>{r?.droppedOut}</B>
               </div>
-              <p className="mt-1 text-sm italic text-foreground/85">
-                <B k={`result.personas.${p.id}.verdict`} mono={false}>{r?.verdict ?? DASH}</B>
-              </p>
+              {r?.verdict && (
+                <p className="mt-1 text-sm italic text-foreground/85">
+                  <B k={`result.personas.${p.id}.verdict`} mono={false}>{r.verdict}</B>
+                </p>
+              )}
             </div>
           );
         })}

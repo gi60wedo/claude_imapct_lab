@@ -39,6 +39,15 @@ test('every digit on the dashboard is bound and the persona cards follow the sel
   await waitFor(() => expect(document.querySelector('[data-bind="result.personas.senior.score"]')?.textContent).toMatch(/\d/));
   expect(unboundDigits(screen.getByTestId('dashboard'))).toEqual([]);
 
+  // The selected candidate is marked, and persona cards drop the verdict line when there is none.
+  const selected = screen.getAllByTestId('candidate-card').filter((c) => c.getAttribute('aria-pressed') === 'true');
+  expect(selected).toHaveLength(1);
+  expect(selected[0].querySelector('[data-testid=candidate-viewing]')).not.toBeNull();
+  for (const card of screen.getAllByTestId(/^persona-card-/)) {
+    const verdict = card.querySelector('[data-bind$=".verdict"]');
+    if (verdict) expect(verdict.textContent).not.toBe('—');
+  }
+
   const before = personaNumbers();
   const cards = screen.getAllByTestId('candidate-card');
   const target = cards[1].getAttribute('aria-pressed') === 'true' ? cards[0] : cards[1];

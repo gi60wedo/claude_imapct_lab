@@ -1,7 +1,7 @@
-import type { ReactNode } from 'react';
+import { useEffect, useRef, type ReactNode } from 'react';
 import type { Brief, Candidate, Scenario, SimulationResult, TimeSlice } from '../../contracts';
 import { formatClock, gini } from '../../sim/metrics';
-import type { CameraMode } from './cityThreeTypes';
+import type { CameraMode } from '../three/CityThree';
 import { KIND_LABEL, PERSONAS, SCENARIO_LABEL, SLICE_IDS, failingPersona, sliceParts, type Ranked } from './model';
 import { Accent, B, Card, DASH, Label } from './ui';
 
@@ -56,13 +56,24 @@ export function TopBar({ result, scenario, slice }: { result: SimulationResult |
 export function CandidateList({ ranked, selectedId, brief, scenario, onSelect }: {
   ranked: Ranked[]; selectedId: string | null; brief: Brief | null; scenario: Scenario; onSelect: (id: string) => void;
 }) {
+  const list = useRef<HTMLOListElement>(null);
+  // Keep the selected card in view: boot selects the brief's pick, which can sit low in the list.
+  useEffect(() => {
+    const ol = list.current;
+    const item = ol?.querySelector<HTMLElement>('[aria-pressed=true]')?.closest('li');
+    if (!ol || !item) return;
+    const top = item.offsetTop, bottom = top + item.offsetHeight;
+    if (top < ol.scrollTop || bottom > ol.scrollTop + ol.clientHeight) {
+      ol.scrollTop = Math.max(0, top - (ol.clientHeight - item.offsetHeight) / 2);
+    }
+  }, [selectedId, ranked.length]);
   return (
-    <Card className="w-[380px] p-4" testId="candidate-list">
-      <div className="mb-3 flex items-start justify-between gap-3">
+    <Card className="pointer-events-auto flex min-h-0 w-[380px] flex-col p-4" testId="candidate-list">
+      <div className="mb-3 flex shrink-0 items-start justify-between gap-3">
         <Label><B k="ranked.length">{ranked.length}</B> competing relocation candidates</Label>
         <Accent className="text-right">Nuremberg · {SCENARIO_LABEL[scenario]}</Accent>
       </div>
-      <ol className="flex max-h-[38vh] flex-col gap-2 overflow-y-auto pr-1">
+      <ol ref={list} className="relative flex min-h-0 flex-col gap-2 overflow-y-auto scroll-smooth pr-1" data-testid="candidate-scroll">
         {ranked.map(({ candidate: c, result, score, rank }, i) => {
           const selected = c.id === selectedId;
           const fail = failingPersona(result);
@@ -73,12 +84,15 @@ export function CandidateList({ ranked, selectedId, brief, scenario, onSelect }:
               <button
                 type="button" data-testid="candidate-card" data-candidate={c.id} aria-pressed={selected}
                 onClick={() => onSelect(c.id)}
-                className={`w-full rounded-lg border p-3 text-left transition ${selected
-                  ? 'border-cyan-400/70 bg-cyan-400/10 shadow-[0_0_16px_rgba(34,211,238,0.25)]'
+                className={`w-full rounded-lg border px-3 py-2 text-left transition ${selected
+                  ? 'border-cyan-300 bg-cyan-400/15 shadow-[0_0_18px_rgba(34,211,238,0.35)] ring-1 ring-cyan-300/60'
                   : 'border-border bg-background/60 hover:border-cyan-400/40'}`}
               >
-                <div className={`text-sm font-semibold uppercase ${fail ? 'text-red-400' : 'text-cyan-300'}`}>
-                  Candidate {String.fromCharCode(65 + i)}{winner && ' (recommended)'}
+                <div className="flex items-center justify-between gap-2">
+                  <span className={`text-sm font-semibold uppercase ${fail ? 'text-red-400' : 'text-cyan-300'}`}>
+                    Candidate {String.fromCharCode(65 + i)}{winner && ' (recommended)'}
+                  </span>
+                  {selected && <span className="text-xs font-semibold uppercase tracking-wider text-cyan-200" data-testid="candidate-viewing">● Viewing</span>}
                 </div>
                 <div className="flex items-center justify-between gap-2">
                   <span className="truncate text-base font-bold">{c.name}</span>

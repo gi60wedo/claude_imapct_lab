@@ -1,8 +1,9 @@
 // Loads the terrain and LoD2 buildings once and turns them into a handful of merged three.js
 // objects in the local metric frame (x east, y up = elevation − baseElevation, z = −north).
 import {
-  BufferGeometry, Color, EdgesGeometry, Group, LineBasicMaterial, LineSegments, Mesh,
-  MeshStandardMaterial, PlaneGeometry, SRGBColorSpace, Texture, TextureLoader, Vector2,
+  BackSide, BufferGeometry, Color, DoubleSide, EdgesGeometry, Float32BufferAttribute, Group,
+  LineBasicMaterial, LineSegments, Mesh, MeshDepthMaterial, MeshStandardMaterial, PlaneGeometry,
+  SRGBColorSpace, Texture, TextureLoader, Vector2,
   type WebGLProgramParametersWithUniforms,
 } from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
@@ -18,9 +19,14 @@ interface TerrainMetadata {
 interface BuildingRecord { id: string; polygon: [number, number, number][][]; h: number; roof?: string }
 interface BuildingsAsset { baseElevation: number; buildings: BuildingRecord[] }
 
-/** Uniforms shared by every building and edge material: the glow around the selected site. */
-export interface FocusUniforms {
+/**
+ * Uniforms shared by every building, edge and shadow-depth material: the glow around the selected
+ * site, and uLift, the vertical exaggeration applied to building bases. The terrain mesh takes the
+ * same factor as its y scale, so buildings stay seated on the exaggerated ground.
+ */
+export interface CityUniforms {
   uFocus: { value: Vector2 }; uFocusRadius: { value: number }; uFocusStrength: { value: number };
+  uLift: { value: number };
 }
 
 export interface CityModel {
@@ -31,7 +37,7 @@ export interface CityModel {
   terrain: Mesh;
   buildings: Group;
   buildingCount: number;
-  focus: FocusUniforms;
+  uniforms: CityUniforms;
 }
 
 const TILE_M = 600;
@@ -98,12 +104,19 @@ function buildTerrain(raster: ElevationRaster, frame: LocalFrame, texture: Textu
   return { mesh, width, depth };
 }
 
-function injectFocus(shader: WebGLProgramParametersWithUniforms, focus: FocusUniforms, fragment: string) {
-  Object.assign(shader.uniforms, focus);
+/** Raises each vertex by (uLift − 1) × its building's base, so the base sits on lifted terrain. */
+function injectLift(shader: WebGLProgramParametersWithUniforms, uniforms: CityUniforms, extra = '') {
+  Object.assign(shader.uniforms, uniforms);
   shader.vertexShader = shader.vertexShader
-    .replace('#include <common>', '#include <common>\nvarying vec3 vFocusWorld;')
+    .replace('#include <common>', '#include <common>\nattribute float aBase;\nuniform float uLift;\nvarying vec3 vFocusWorld;')
     .replace('#include <begin_vertex>',
-      '#include <begin_vertex>\nvFocusWorld = (modelMatrix * vec4(transformed, 1.0)).xyz;');
+      `#include <begin_vertex>\ntransformed.y += (uLift - 1.0) * aBase;${extra}`);
+}
+
+function injectFocus(shader: WebGLProgramParametersWithUniforms, uniforms: CityUniforms, fragment: string) {
+  // The glow reads true heights, so the lift is taken back out of vFocusWorld.
+  injectLift(shader, uniforms,
+    '\nvFocusWorld = (modelMatrix * vec4(transformed, 1.0)).xyz;\nvFocusWorld.y -= (uLift - 1.0) * aBase;');
   shader.fragmentShader = shader.fragmentShader
     .replace('#include <common>', `#include <common>
 varying vec3 vFocusWorld;
@@ -115,12 +128,14 @@ float focusAmount() {
     .replace(fragment.split('\n')[0], fragment);
 }
 
-function buildingMaterials(focus: FocusUniforms) {
+function buildingMaterials(uniforms: CityUniforms) {
+  // Double-sided so a section cut (side view) shows the far walls of sliced buildings instead of
+  // hollow shells; shadows keep the single-sided back-face casting.
   const glass = new MeshStandardMaterial({
     color: new Color('#16263f'), roughness: 0.42, metalness: 0.35,
-    emissive: new Color('#071426'), emissiveIntensity: 1,
+    emissive: new Color('#071426'), emissiveIntensity: 1, side: DoubleSide, shadowSide: BackSide,
   });
-  glass.onBeforeCompile = (shader) => injectFocus(shader, focus, `#include <emissivemap_fragment>
+  glass.onBeforeCompile = (shader) => injectFocus(shader, uniforms, `#include <emissivemap_fragment>
 {
   float f = focusAmount();
   float rise = clamp(vFocusWorld.y / 60.0, 0.0, 1.0);
@@ -131,17 +146,28 @@ function buildingMaterials(focus: FocusUniforms) {
   const edges = new LineBasicMaterial({
     color: new Color('#38bdf8'), transparent: true, opacity: 0.16, depthWrite: false,
   });
-  edges.onBeforeCompile = (shader) => injectFocus(shader, focus, `#include <color_fragment>
+  edges.onBeforeCompile = (shader) => injectFocus(shader, uniforms, `#include <color_fragment>
 {
   float f = focusAmount();
   diffuseColor.a = clamp(diffuseColor.a * (1.0 + 4.0 * f), 0.0, 1.0);
   diffuseColor.rgb += vec3(0.25, 0.55, 0.65) * f;
 }`);
-  return { glass, edges };
+  // Same as the shadow map's default depth material, plus the lift.
+  const depth = new MeshDepthMaterial();
+  depth.onBeforeCompile = (shader) => injectLift(shader, uniforms);
+  return { glass, edges, depth };
 }
 
-async function buildBuildings(asset: BuildingsAsset, frame: LocalFrame, focus: FocusUniforms) {
-  const tiles = new Map<string, BufferGeometry[]>();
+/** Per-vertex copy of the building base, read by the uLift shader code. */
+function withBase<T extends BufferGeometry>(geometry: T, zBase: number): T {
+  const count = geometry.getAttribute('position').count;
+  geometry.setAttribute('aBase', new Float32BufferAttribute(new Float32Array(count).fill(zBase), 1));
+  return geometry;
+}
+
+async function buildBuildings(asset: BuildingsAsset, frame: LocalFrame, uniforms: CityUniforms) {
+  // Edges are built per building so each edge vertex can carry its building's base.
+  const tiles = new Map<string, { solids: BufferGeometry[]; edges: BufferGeometry[] }>();
   let built = 0;
   for (let i = 0; i < asset.buildings.length; i++) {
     const building = asset.buildings[i];
@@ -152,28 +178,31 @@ async function buildBuildings(asset: BuildingsAsset, frame: LocalFrame, focus: F
     if (geometry) {
       const [x, n] = project(rings![0][0], frame);
       const key = `${Math.floor(x / TILE_M)}:${Math.floor(n / TILE_M)}`;
-      const list = tiles.get(key) ?? [];
-      list.push(geometry);
-      tiles.set(key, list);
+      const tile = tiles.get(key) ?? { solids: [], edges: [] };
+      tile.solids.push(withBase(geometry, zBase!));
+      tile.edges.push(withBase(new EdgesGeometry(geometry, 28), zBase!));
+      tiles.set(key, tile);
       built++;
     }
     if (i % 600 === 599) await yieldToBrowser();
   }
-  const { glass, edges } = buildingMaterials(focus);
+  const { glass, edges, depth } = buildingMaterials(uniforms);
   const group = new Group();
   group.name = 'buildings';
-  for (const [key, parts] of [...tiles.entries()].sort(([a], [b]) => a.localeCompare(b))) {
-    const merged = mergeGeometries(parts, false);
-    for (const part of parts) part.dispose();
-    if (!merged) continue;
+  for (const [key, tile] of [...tiles.entries()].sort(([a], [b]) => a.localeCompare(b))) {
+    const merged = mergeGeometries(tile.solids, false);
+    const outlines = mergeGeometries(tile.edges, false);
+    for (const part of [...tile.solids, ...tile.edges]) part.dispose();
+    if (!merged || !outlines) continue;
     merged.computeBoundingSphere();
     const mesh = new Mesh(merged, glass);
     mesh.name = `buildings-${key}`;
+    mesh.customDepthMaterial = depth;
     mesh.castShadow = true;
     mesh.receiveShadow = true;
     // Buildings never take pointer events; skipping the raycast keeps hover cheap.
     mesh.raycast = () => {};
-    const lines = new LineSegments(new EdgesGeometry(merged, 28), edges);
+    const lines = new LineSegments(outlines, edges);
     lines.name = `edges-${key}`;
     lines.raycast = () => {};
     group.add(mesh, lines);
@@ -205,15 +234,16 @@ async function loadCity(): Promise<CityModel> {
     loadRaster(terrain.elevation?.url ?? '/data/terrain/elevation.png', terrain.bounds, decoder),
     new TextureLoader().loadAsync(assetUrl(terrain.texture?.url ?? '/data/terrain/texture.jpg')),
   ]);
-  const focus: FocusUniforms = {
+  const uniforms: CityUniforms = {
     uFocus: { value: new Vector2(0, 0) }, uFocusRadius: { value: 220 }, uFocusStrength: { value: 0 },
+    uLift: { value: 1 },
   };
   const ground = buildTerrain(raster, frame, texture);
-  const { group, built } = await buildBuildings(asset, frame, focus);
+  const { group, built } = await buildBuildings(asset, frame, uniforms);
   return {
     frame, raster, baseElevation: terrain.baseElevation,
     size: { width: ground.width, depth: ground.depth },
-    terrain: ground.mesh, buildings: group, buildingCount: built, focus,
+    terrain: ground.mesh, buildings: group, buildingCount: built, uniforms,
   };
 }
 

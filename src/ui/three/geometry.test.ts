@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import terrain from '../../../public/data/terrain/terrain.json';
-import { cameraPreset } from './camera';
+import { cameraPreset, SIDE_DISTANCE_M } from './camera';
 import {
-  createLocalFrame, decodeTerrarium, extrudeFootprint, footprintShape, heatColor, openRing, project,
-  sampleElevation, sampleTrip, stallGrid, TERRARIUM, toWorld, unproject, type ElevationRaster, type LngLat,
+  createLocalFrame, decodeTerrarium, extrudeFootprint, facing, footprintShape, heatColor, openRing, project,
+  sampleElevation, sampleTrip, slopeAxis, stallGrid, TERRARIUM, toWorld, unproject, type ElevationRaster, type LngLat,
 } from './geometry';
 
 const ORIGIN: LngLat = [11.0786, 49.4526];
@@ -161,5 +161,43 @@ describe('trip sampling and ramps', () => {
     const side = cameraPreset('side', [0, 0, 0]), top = cameraPreset('top', [0, 0, 0]);
     expect(side.position[1]).toBeLessThan(cameraPreset('perspective', [0, 0, 0]).position[1]);
     expect(top.position[1]).toBeGreaterThan(1000 * Math.abs(top.position[2]));
+  });
+
+  it('puts the side camera at street level, a few hundred metres back, looking nearly level', () => {
+    const forward: [number, number] = [Math.SQRT1_2, -Math.SQRT1_2];
+    const { position, target } = cameraPreset('side', [10, 40, -20], forward);
+    const back = Math.hypot(position[0] - target[0], position[2] - target[2]);
+    expect(back).toBeCloseTo(SIDE_DISTANCE_M, 6);
+    expect(position[1] - 40).toBeLessThan(30);
+    expect(Math.atan2(position[1] - target[1], back)).toBeLessThan(0.02);
+    // Camera sits behind the target along −forward.
+    expect((target[0] - position[0]) * forward[0] + (target[2] - position[2]) * forward[1]).toBeCloseTo(back, 6);
+  });
+});
+
+describe('side elevation axis', () => {
+  /** 3×3 raster over [0,3]² whose height rises with lng (east) by `east` and lat by `north` per pixel. */
+  const ramp = (east: number, north: number): ElevationRaster => {
+    const heights: number[] = [];
+    for (let row = 0; row < 3; row++) for (let col = 0; col < 3; col++) heights.push(50 + east * col + north * (2 - row));
+    const pixels = new Uint8ClampedArray(heights.flatMap((h) => [...encode(h), 255]));
+    return { pixels, width: 3, height: 3, bounds: [0, 0, 3, 3], decoder: TERRARIUM };
+  };
+  const unit = createLocalFrame([1.5, 1.5]);
+  unit.eastPerDegree = unit.northPerDegree = 1;
+
+  it('runs along the steepest rise, pointing east-ish, and falls back to east on flat ground', () => {
+    expect(slopeAxis([1.5, 1.5], ramp(4, 0), unit, 0.5)).toEqual([1, 0]);
+    const [e, n] = slopeAxis([1.5, 1.5], ramp(0, 4), unit, 0.5);
+    expect(e).toBeCloseTo(0, 6); expect(Math.abs(n)).toBeCloseTo(1, 6);
+    const [we, wn] = slopeAxis([1.5, 1.5], ramp(-4, 0), unit, 0.5);
+    expect(we).toBeCloseTo(1, 6); expect(wn).toBeCloseTo(0, 6);
+    expect(slopeAxis([1.5, 1.5], ramp(0, 0), unit, 0.5)).toEqual([1, 0]);
+  });
+
+  it('faces perpendicular to the axis with the axis on screen-right', () => {
+    expect(facing([1, 0])).toEqual([-0, 1]);
+    const [fe, fn] = facing([0.6, 0.8]);
+    expect(fe * 0.6 + fn * 0.8).toBeCloseTo(0, 9);
   });
 });

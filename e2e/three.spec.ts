@@ -30,12 +30,18 @@ test('three dashboard: camera modes, heatmap, candidate switch, rule zero', asyn
   await expect(page.locator('[data-testid=city-three][data-ready=true]')).toBeVisible({ timeout: 30_000 });
   await expect(page.getByTestId('candidate-card').nth(1)).toBeVisible();
   await expect(page.locator('[data-testid=persona-card-senior] [data-bind="result.personas.senior.score"]')).toHaveText(/\d/);
+  // The boot selection is highlighted and scrolled into view; the overlay fits without scrolling.
+  await expect(page.locator('[data-testid=candidate-card][aria-pressed=true] [data-testid=candidate-viewing]')).toBeInViewport();
+  await expect(page.getByTestId('time-bar')).toBeInViewport();
+  // A persona without a verdict shows no verdict line at all, not a bare dash.
+  await expect(page.locator('[data-testid^=persona-card-] [data-bind$=".verdict"]', { hasText: /^—$/ })).toHaveCount(0);
   await page.screenshot({ path: `${SHOTS}/three-initial.png` });
 
   for (const mode of ['side', 'top', 'perspective'] as const) {
     await page.getByTestId(`camera-${mode}`).click();
     await expect(page.getByTestId(`camera-${mode}`)).toHaveAttribute('aria-pressed', 'true');
-    await page.waitForTimeout(800); // let the camera tween settle before the shot
+    await expect(page.getByTestId('side-legend')).toHaveCount(mode === 'side' ? 1 : 0);
+    await page.waitForTimeout(1500); // let the camera tween settle before the shot
     await page.screenshot({ path: `${SHOTS}/three-${mode}.png` });
   }
 

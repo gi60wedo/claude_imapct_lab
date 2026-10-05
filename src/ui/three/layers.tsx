@@ -1,8 +1,8 @@
 // Per-frame scene layers on top of the static city: candidate plates, trips, heat, bottlenecks
 // and stalls. Every size, colour intensity and count derives from the props; nothing is typed in.
+// `lift` is the vertical exaggeration shared with the terrain and building bases.
 import { useLayoutEffect, useMemo, useRef } from 'react';
 import { useFrame, type ThreeEvent } from '@react-three/fiber';
-import { Html } from '@react-three/drei';
 import {
   AdditiveBlending, BoxGeometry, BufferGeometry, CanvasTexture, Color, CylinderGeometry,
   DoubleSide, Float32BufferAttribute, type InstancedMesh, type Mesh, MeshBasicMaterial,
@@ -19,7 +19,30 @@ export const PERSONA_COLORS: Record<PersonaId, string> = {
   senior: '#8b5cf6', vendor: '#f97316', commuter: '#3b82f6', retailer: '#9ca3af',
 };
 
-const ground = (city: CityModel, [lng, lat]: LngLat) => sampleElevation(lng, lat, city.raster);
+export const ground = (city: CityModel, [lng, lat]: LngLat, lift: number) => sampleElevation(lng, lat, city.raster) * lift;
+
+/** Ring with extra vertices every `step` metres, so outlines and plates follow the terrain. */
+function densify(ring: readonly LngLat[], city: CityModel, step = 3): LngLat[] {
+  const out: LngLat[] = [];
+  ring.forEach((a, i) => {
+    const b = ring[(i + 1) % ring.length];
+    const [ax, an] = project(a, city.frame), [bx, bn] = project(b, city.frame);
+    const n = Math.max(1, Math.ceil(Math.hypot(bx - ax, bn - an) / step));
+    for (let k = 0; k < n; k++) out.push([a[0] + ((b[0] - a[0]) * k) / n, a[1] + ((b[1] - a[1]) * k) / n]);
+  });
+  return out;
+}
+
+const PLATE_LIFT_M = 0.5;
+
+/** Selected-site centre draped on the (lifted) terrain: the base of the beam and label. */
+export function siteAnchor(city: CityModel, candidate: Candidate, lift: number): [number, number, number] {
+  const c = ringCenter(openRing(candidate.polygon));
+  return toWorld(c, city.frame, ground(city, c, lift) + PLATE_LIFT_M);
+}
+
+/** Height of the selected site's light beam; the label sits just above it. */
+export const BEAM_M = 120;
 const scratch = new Object3D();
 const hidden = new Object3D();
 hidden.scale.setScalar(0);
@@ -34,20 +57,28 @@ function candidateColor(candidate: Candidate, selected: boolean, maxRank: number
   return new Color('#34d399').lerp(new Color('#0ea5e9'), (candidate.quickRank - 1) / (maxRank - 1));
 }
 
-function CandidateSite({ city, candidate, selected, maxRank, onSelect }: {
-  city: CityModel; candidate: Candidate; selected: boolean; maxRank: number; onSelect?: (id: string) => void;
+function CandidateSite({ city, candidate, selected, maxRank, lift, onSelect }: {
+  city: CityModel; candidate: Candidate; selected: boolean; maxRank: number; lift: number;
+  onSelect?: (id: string) => void;
 }) {
   const plate = useRef<MeshBasicMaterial>(null);
-  const { shape, outline, y, center } = useMemo(() => {
-    const ring = openRing(candidate.polygon);
-    const top = Math.max(...ring.map((point) => ground(city, point))) + 0.5;
-    const points = [...ring, ring[0]].flatMap((point) => toWorld(point, city.frame, top + 0.15));
+  const { shape, outline, center } = useMemo(() => {
+    const ring = densify(openRing(candidate.polygon), city);
+    const points = [...ring, ring[0]].flatMap((point) => toWorld(point, city.frame, ground(city, point, lift) + PLATE_LIFT_M + 0.15));
     const line = new BufferGeometry();
     line.setAttribute('position', new Float32BufferAttribute(points, 3));
-    const c = ringCenter(ring);
-    return { shape: new ShapeGeometry(footprintShape([ring], city.frame)), outline: line, y: top,
-      center: toWorld(c, city.frame, top) };
-  }, [city, candidate.polygon]);
+    // The plate lies in the (east, north) plane; its local z becomes world y after the −90° turn,
+    // so each vertex is draped onto the terrain under it.
+    const plateGeometry = new ShapeGeometry(footprintShape([ring], city.frame));
+    const positions = plateGeometry.getAttribute('position');
+    for (let i = 0; i < positions.count; i++) {
+      const point = unproject([positions.getX(i), positions.getY(i)], city.frame);
+      positions.setZ(i, ground(city, point, lift) + PLATE_LIFT_M);
+    }
+    positions.needsUpdate = true;
+    plateGeometry.computeBoundingSphere();
+    return { shape: plateGeometry, outline: line, center: siteAnchor(city, candidate, lift) };
+  }, [city, candidate, lift]);
   useLayoutEffect(() => () => { shape.dispose(); outline.dispose(); }, [shape, outline]);
   const color = candidateColor(candidate, selected, maxRank);
   const base = selected ? 0.5 : candidate.passedFilter ? 0.28 : 0.14;
@@ -62,7 +93,7 @@ function CandidateSite({ city, candidate, selected, maxRank, onSelect }: {
   return (
     <group>
       {/* Shape is in the (east, north) plane; rotating −90° about x maps north to −z. */}
-      <mesh geometry={shape} rotation-x={-Math.PI / 2} position-y={y} onClick={click}
+      <mesh geometry={shape} rotation-x={-Math.PI / 2} onClick={click}
         onPointerOver={() => { document.body.style.cursor = 'pointer'; }}
         onPointerOut={() => { document.body.style.cursor = ''; }}>
         <meshBasicMaterial ref={plate} color={color} transparent opacity={base} side={DoubleSide}
@@ -72,33 +103,26 @@ function CandidateSite({ city, candidate, selected, maxRank, onSelect }: {
         <lineBasicMaterial color={color} transparent opacity={selected ? 1 : 0.75}
           depthTest={false} toneMapped={false} />
       </lineLoop>
+      {/* The name label is a DOM overlay owned by CityThree (LabelAnchor), not drei <Html>. */}
       {selected && (
-        <>
-          <mesh position={[center[0], y + 60, center[2]]}>
-            <cylinderGeometry args={[1.2, 5, 120, 16, 1, true]} />
-            <meshBasicMaterial color={color} transparent opacity={0.22} blending={AdditiveBlending}
-              depthWrite={false} side={DoubleSide} toneMapped={false} />
-          </mesh>
-          <Html position={[center[0], y + 128, center[2]]} center zIndexRange={[10, 0]}>
-            <span data-bind="candidate.name"
-              className="whitespace-nowrap rounded border border-cyan-300/40 bg-slate-950/80 px-2 py-0.5 font-mono text-xs text-cyan-200">
-              {candidate.name}
-            </span>
-          </Html>
-        </>
+        <mesh position={[center[0], center[1] + BEAM_M / 2, center[2]]}>
+          <cylinderGeometry args={[1.2, 5, BEAM_M, 16, 1, true]} />
+          <meshBasicMaterial color={color} transparent opacity={0.22} blending={AdditiveBlending}
+            depthWrite={false} side={DoubleSide} toneMapped={false} />
+        </mesh>
       )}
     </group>
   );
 }
 
-export function Candidates({ city, candidates, selectedId, onSelect }: {
-  city: CityModel; candidates: Candidate[]; selectedId: string | null; onSelect?: (id: string) => void;
+export function Candidates({ city, candidates, selectedId, lift, onSelect }: {
+  city: CityModel; candidates: Candidate[]; selectedId: string | null; lift: number; onSelect?: (id: string) => void;
 }) {
   const maxRank = Math.max(1, ...candidates.map((c) => c.quickRank ?? 1));
   return (
     <group name="candidates">
       {candidates.filter((c) => c.polygon.length >= 3).map((candidate) => (
-        <CandidateSite key={candidate.id} city={city} candidate={candidate} maxRank={maxRank}
+        <CandidateSite key={candidate.id} city={city} candidate={candidate} maxRank={maxRank} lift={lift}
           selected={candidate.id === selectedId} onSelect={onSelect} />
       ))}
     </group>
@@ -109,16 +133,16 @@ const TRAIL = 7;
 const TRAIL_STEP_S = 5;
 
 /** Instanced agent dots: a bright head plus fading ghosts at earlier sim times. */
-export function Trips({ city, trips, timeSec }: {
-  city: CityModel; trips: SimulationResult['trips']; timeSec: number;
+export function Trips({ city, trips, timeSec, lift }: {
+  city: CityModel; trips: SimulationResult['trips']; timeSec: number; lift: number;
 }) {
   const mesh = useRef<InstancedMesh>(null);
   const time = useRef(timeSec);
   time.current = timeSec;
   const paths = useMemo(() => trips.map((trip) => trip.path.map(([lng, lat, t]): TripPoint => {
-    const [x, y, z] = toWorld([lng, lat], city.frame, ground(city, [lng, lat]) + 1.6);
+    const [x, y, z] = toWorld([lng, lat], city.frame, ground(city, [lng, lat], lift) + 1.6);
     return { x, y, z, time: t };
-  })), [city, trips]);
+  })), [city, trips, lift]);
   const count = Math.max(1, trips.length * TRAIL);
   useLayoutEffect(() => {
     const target = mesh.current;
@@ -174,7 +198,7 @@ function radialGlow() {
 }
 
 /** Heat for one slice: a ground-draped glow disc and a light column per weighted point. */
-export function Heat({ city, heat }: { city: CityModel; heat: [number, number, number][] }) {
+export function Heat({ city, heat, lift }: { city: CityModel; heat: [number, number, number][]; lift: number }) {
   const discs = useRef<InstancedMesh>(null);
   const columns = useRef<InstancedMesh>(null);
   const count = Math.max(1, heat.length);
@@ -187,7 +211,7 @@ export function Heat({ city, heat }: { city: CityModel; heat: [number, number, n
     heat.forEach(([lng, lat, weight], i) => {
       const t = weight / max;
       const [x, , z] = toWorld([lng, lat], city.frame);
-      const y = ground(city, [lng, lat]);
+      const y = ground(city, [lng, lat], lift);
       color.setRGB(...heatColor(t));
       scratch.position.set(x, y + 0.8, z);
       scratch.scale.set(14 + 26 * t, 1, 14 + 26 * t);
@@ -206,7 +230,7 @@ export function Heat({ city, heat }: { city: CityModel; heat: [number, number, n
       target.instanceMatrix.needsUpdate = true;
       if (target.instanceColor) target.instanceColor.needsUpdate = true;
     }
-  }, [city, heat, count]);
+  }, [city, heat, count, lift]);
   return (
     <group name="heat">
       <instancedMesh key={`d${count}`} ref={discs} args={[discGeometry, undefined, count]} frustumCulled={false}>
@@ -225,12 +249,14 @@ const markerSphere = new SphereGeometry(1, 16, 12);
 const markerRing = new RingGeometry(0.8, 1, 48).rotateX(-Math.PI / 2);
 const markerBeam = new CylinderGeometry(0.4, 0.4, 1, 8, 1, true).translate(0, 0.5, 0);
 
-function BottleneckMarker({ city, bottleneck, phase }: { city: CityModel; bottleneck: Bottleneck; phase: number }) {
+function BottleneckMarker({ city, bottleneck, phase, lift }: {
+  city: CityModel; bottleneck: Bottleneck; phase: number; lift: number;
+}) {
   const ring = useRef<Mesh>(null);
   const core = useRef<Mesh>(null);
   const point: LngLat = [bottleneck.lng, bottleneck.lat];
   const [x, , z] = toWorld(point, city.frame);
-  const y = ground(city, point);
+  const y = ground(city, point, lift);
   const severity = Math.max(0, Math.min(1, bottleneck.severity));
   const radius = 2.5 + 5 * severity;
   useFrame(({ clock }) => {
@@ -258,11 +284,11 @@ function BottleneckMarker({ city, bottleneck, phase }: { city: CityModel; bottle
   );
 }
 
-export function Bottlenecks({ city, bottlenecks }: { city: CityModel; bottlenecks: Bottleneck[] }) {
+export function Bottlenecks({ city, bottlenecks, lift }: { city: CityModel; bottlenecks: Bottleneck[]; lift: number }) {
   return (
     <group name="bottlenecks">
       {bottlenecks.map((bottleneck, i) => (
-        <BottleneckMarker key={`${bottleneck.lng}:${bottleneck.lat}:${i}`} city={city} bottleneck={bottleneck}
+        <BottleneckMarker key={`${bottleneck.lng}:${bottleneck.lat}:${i}`} city={city} bottleneck={bottleneck} lift={lift}
           phase={bottlenecks.length ? i / bottlenecks.length : 0} />
       ))}
     </group>
@@ -274,7 +300,9 @@ export function Bottlenecks({ city, bottlenecks }: { city: CityModel; bottleneck
  * Positions are illustrative: the contract carries per-slot exposure but no stall coordinates.
  * TODO(subagent): contract needs stall positions (SimulationResult.stalls[].lng/lat).
  */
-export function Stalls({ city, candidate, exposure }: { city: CityModel; candidate: Candidate; exposure: number[] }) {
+export function Stalls({ city, candidate, exposure, lift }: {
+  city: CityModel; candidate: Candidate; exposure: number[]; lift: number;
+}) {
   const mesh = useRef<InstancedMesh>(null);
   const count = Math.max(1, exposure.length);
   const geometry = useMemo(() => new BoxGeometry(1, 1, 1).translate(0, 0.5, 0), []);
@@ -293,7 +321,7 @@ export function Stalls({ city, candidate, exposure }: { city: CityModel; candida
     const color = new Color();
     cells.forEach(([east, north], i) => {
       const t = exposure[i] / max;
-      scratch.position.set(east, ground(city, unproject([east, north], city.frame)) + 0.55, -north);
+      scratch.position.set(east, ground(city, unproject([east, north], city.frame), lift) + 0.55, -north);
       scratch.scale.set(size, 1 + 3 * t, size * 0.7);
       scratch.updateMatrix();
       target.setMatrixAt(i, scratch.matrix);
@@ -302,7 +330,7 @@ export function Stalls({ city, candidate, exposure }: { city: CityModel; candida
     target.count = cells.length;
     target.instanceMatrix.needsUpdate = true;
     if (target.instanceColor) target.instanceColor.needsUpdate = true;
-  }, [city, candidate.polygon, exposure, count]);
+  }, [city, candidate.polygon, exposure, count, lift]);
   return (
     <instancedMesh key={count} ref={mesh} args={[geometry, undefined, count]} frustumCulled={false}
       renderOrder={insideBuilding ? 20 : 0} castShadow>
