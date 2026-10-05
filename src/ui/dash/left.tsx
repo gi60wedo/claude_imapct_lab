@@ -131,7 +131,7 @@ export function CandidateList({ ranked, selectedId, brief, scenario, onSelect }:
                   {selected && <span className="text-sm font-semibold uppercase text-white" data-testid="candidate-viewing">● Viewing</span>}
                 </div>
                 <div className="flex items-center justify-between gap-2">
-                  <span className="truncate text-base font-semibold">{c.name}</span>
+                  <span data-bind="candidate.name" className="truncate text-base font-semibold">{c.name}</span>
                   {fail ? (
                     <span className="shrink-0 rounded-lg border border-rose-400/50 bg-rose-500/10 px-1.5 text-sm text-rose-200" data-testid="fail-chip">
                       ⚠ <B k={`result.personas.${fail.id}.score`}>{fail.score}</B> {failLabel}

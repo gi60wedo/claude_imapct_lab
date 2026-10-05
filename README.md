@@ -1,98 +1,104 @@
-# 🏛️ UrbanTwin: Market-Sim
+# UrbanTwin Market-Sim
 
-**Track 2 · Fraunhofer IIS Challenge** · Claude Impact Lab #2, Nürnberg
+A digital twin of Nuremberg’s Altstadt for comparing market locations through pedestrian and delivery simulations.
 
-Nuremberg's vegetable market has to leave the **Hauptmarkt**. UrbanTwin is a digital twin of the Altstadt that simulates a market Saturday at each candidate site. The organizer sites are Hauptmarkt, St. Lorenzkirche and the former Kaufhof. The twin shows who wins and who loses: seniors, vendors, commuters and nearby shops. Claude explains the trade-offs and proposes fixes, and the engine re-simulates them.
+[Project overview](docs/PROJECT_OVERVIEW.html) · [Implementation plan](IMPLEMENTATION_PLAN.md) · [Data sources](datasets/README.md) · [Simulation model](src/sim/README.md)
 
-> **Rule zero:** every number comes from the engine and real Nuremberg data. Claude explains results but never invents a number.
+![Dark Three.js dashboard of Nuremberg’s Altstadt](docs/assets/three-dashboard.png)
 
-For a one-page visual explainer of what the project does, who it's for and how it works, open [`docs/PROJECT_OVERVIEW.html`](docs/PROJECT_OVERVIEW.html) in a browser. The full plan is in [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md). A printable version is in [`docs/UrbanTwin_Group_Plan.pdf`](docs/UrbanTwin_Group_Plan.pdf).
+## What it does
 
----
+Moving a vegetable market changes access for seniors, delivery routes for vendors, commuter travel times, and footfall for nearby shops. UrbanTwin compares Hauptmarkt, Lorenzkirche, the former Kaufhof, and discovered candidate sites using geographic data and a seeded simulation.
 
-## Status
+The Three.js dashboard renders real building roofs and terrain in a dark monochrome city. Moving dots show simulated agents. Candidate cards, persona scores, heat overlays, and a live clock let you inspect the trade-offs. The optional Claude service explains engine results and proposes mitigations that the engine can simulate again.
 
-| Part | Owner | Status |
-|---|---|---|
-| `datasets/`: raw open data | A | ✅ in repo |
-| `src/contracts.ts`: shared types (§5) | all | ✅ |
-| `src/sim/`: pedestrian & delivery twin | B | ✅ runs on real data with DGM1 slope and the LoD2 Kaufhof footprint |
-| `prep/`, `src/rank/`: discovery & ranking | A | ✅ |
-| `src/ui/`: map, ranking, cockpit | C | ✅ |
-| `src/score/`, `server/brief.ts`: scoring & Claude | D | ✅ |
+## Run the dark 3D view
 
----
-
-## Quick start
-
-Requires Node 22.18+ and `unzip` on the PATH, which is only needed to re-extract GTFS.
+Requires **Node.js 22.18 or newer**, npm, and a browser with WebGL support. Prepared browser data is included in the repository.
 
 ```bash
-npm install
-npm test               # Vitest: synthetic grid + Nuremberg integration
-npm run sim:report     # 3 benchmark sites × 3 scenarios, printed as a table
-npm run typecheck
+git clone https://github.com/gi60wedo/claude_imapct_lab.git
+cd claude_imapct_lab
+npm ci
+npm run dev -- --port 5173
 ```
 
-Example output of `npm run sim:report` (sunny Saturday, seed 42):
+Open **[http://localhost:5173/?view=three](http://localhost:5173/?view=three)**.
 
-```
-                     Hauptmarkt   Lorenzkirche   Kaufhof
-👵 Senior               100          100          70.4
-🚚 Vendor               92.6          5.0         61.0
-💼 Commuter             71.4         91.0         73.8
-🛍️ Retailer             59.2         54.1         64.2
-```
+The `view=three` parameter selects the dark dashboard. The root URL opens the map and ranking interface. The browser runs the simulation in a Web Worker; the 3D view needs no API key.
 
----
+## Explore a scenario
 
-## How the twin works (`src/sim/`)
+1. Select a candidate to compare its scores and inspect the site in 3D.
+2. Switch between sunny Saturday, rainy Saturday, and Christmas market scenarios.
+3. Use the live clock to play, pause, change speed, or jump to a time slice.
+4. Choose perspective, top, or side camera views. Toggle heat and street overlays.
+5. Switch agent dots between persona colours and white for a monochrome scene.
+6. Apply a kiosk, delivery window, loading point, or stall layout mitigation and compare the simulated result.
 
-1. **Load data.** Street and footpath graph from OSM, residents and 65+ share from Zensus 2022, Saturday U-Bahn arrivals from VGN GTFS.
-2. **Create agents.** 👵 seniors and residents, 💼 lunch commuters, tourists, passers-by, and 🚚 vendor vans from 05:30.
-3. **Route.** Dijkstra with costs per persona: cobblestones ×2.5 and steps blocked for seniors, rain ×1.3 on open streets, vans only on vehicle-legal roads and stopped by bollards.
-4. **Decide.** Agents drop out when the site is beyond their walking or time budget.
-5. **Tick.** The day runs in 30-second steps, producing the footfall heatmap, crowding, elevator load and bollard blockages.
-6. **Score.** 5 criteria (accessibility, footfall, fairness, local business, walkability) and 4 persona scores, each with its top friction.
+For a repeatable UI demonstration with fixture results, open `http://localhost:5173/?view=three&data=fixtures`. Fixtures are demonstration data. The normal 3D URL uses the simulation engine.
 
-**What-if scenarios:** `SUNNY_SAT`, `RAINY_SAT` and `CHRISTMAS_MARKET`, which blocks the Hauptmarkt and doubles tourists.
+## Optional Claude explanations
 
-**Mitigations Claude can propose:** an express kiosk, a delivery window, a loading point, or a loop stall layout.
+The default UI uses fixture briefs. To request server-generated explanations, start the API in a second terminal:
 
-A fixed seed gives an identical result, and one site × scenario runs in under 0.25 s. Every model assumption is in [`src/sim/params.ts`](src/sim/params.ts). Integration notes for A, C and D are in [`src/sim/README.md`](src/sim/README.md).
-
-```ts
-import { createTwin } from './src/sim';
-const twin = createTwin(world);
-const result = twin.run(candidate, { scenario: 'RAINY_SAT', seed: 42 });
+```bash
+BRIEF_OFFLINE=1 npm run server
 ```
 
----
+Open `http://localhost:5173/?view=three&brief=live`. Offline mode serves cached or template explanations. For Claude responses, configure `ANTHROPIC_API_KEY` in a local `.env` file and run `npm run server` without `BRIEF_OFFLINE`. The server listens on port 8787, and Vite proxies `/api` requests to it.
 
-## Repository layout
+Explanations use simulation results. The engine computes the scores and reruns proposed mitigations.
 
-```
-claude_imapct_lab/
-├─ IMPLEMENTATION_PLAN.md   master plan (team roles, scoring, sprint, pitch)
-├─ datasets/                OSM, LoD2, DGM1, DOP20, ALKIS, Zensus, GTFS (see datasets/README.md)
-├─ docs/                    printable plan
-├─ src/
-│  ├─ contracts.ts          shared types, frozen at 13:20
-│  └─ sim/                  B: twin engine, worker, tests, dev data builder
-├─ optional_plan.md         early workflow draft
-└─ workflow_overview.md     one-page workflow summary
+## Verify the project
+
+```bash
+npm run build                 # TypeScript check and production bundle
+npm test -- --run --maxWorkers=1  # Unit and integration tests, without watch mode
+npm run sim:report            # Compare three benchmark sites across three scenarios
+npx playwright install chromium
+npm run e2e -- e2e/three.spec.ts
 ```
 
-## Known open points
+The Three.js browser tests exercise camera modes, candidate switching, moving agents, monochrome styling, and scenario changes. They write screenshots to `e2e/__shots__/`. WebGL tests require a Chromium environment with GPU support.
 
-- **Lorenzkirche delivery:** the engine finds the nearest vehicle-legal road 94 m from the stalls (limit 80 m), so vendors score 5. OSM also shows a van route via Adlerstraße. Check those tags on site before the pitch.
-- **Kaufhof seniors:** the nearest step-free stop or elevator is about 390 m from the LoD2 footprint. The store's own elevators aren't in OSM, so this may understate senior access.
+## How it works
 
----
+```mermaid
+flowchart LR
+    Data[OSM · Zensus · VGN GTFS · Bavarian geodata] --> Prep[Geodata preparation]
+    Prep --> World[Prepared world and candidate sites]
+    World --> Engine[Seeded simulation in a Web Worker]
+    Engine --> UI[Three.js dashboard and map]
+    Engine --> Scores[Persona and site scores]
+    Scores --> Brief[Optional Claude explanations]
+    Brief --> Mitigation[Proposed mitigation]
+    Mitigation --> Engine
+```
 
-## Data credits
+Routing accounts for street surfaces, steps, slope, weather, vehicle access, and barriers. Agent decisions use walking and time budgets. A fixed seed makes comparisons reproducible. Model assumptions live in [`src/sim/params.ts`](src/sim/params.ts).
 
-- Datenquelle: Bayerische Vermessungsverwaltung – www.geodaten.bayern.de, CC BY 4.0
-- © OpenStreetMap contributors, ODbL
-- Statistisches Bundesamt (Destatis), Zensus 2022, dl-de/by-2-0
-- VGN Verkehrsverbund Großraum Nürnberg, open data
+The live dashboard requests full-scale runs with all returned trips. A dot represents an agent active at the current simulation time; the visible count changes through the day.
+
+## Data and preparation
+
+The browser reads prepared assets from `public/data/`. Raw sources and their attribution are documented in [`datasets/README.md`](datasets/README.md). Rebuilding geographic assets requires Python tooling through `uv`; large LoD2 inputs use Git LFS. Follow [`prep/README.md`](prep/README.md) for preparation and ranking commands. The 3D roof format is documented in [`public/data/roofs3d.README.md`](public/data/roofs3d.README.md).
+
+## Limits
+
+- Agent behaviour, budgets, and scores are model assumptions. Scores describe this simulation and require validation before planning decisions.
+- Agent sampling affects some scores: Kaufhof fairness in the rainy seed-42 run changes from 70.5 at quarter scale to 76.8 at full scale. The live dashboard uses full scale.
+- Missing or disconnected OSM barriers and unmapped elevators can affect access estimates.
+- Building footprints do not establish usable indoor market area.
+- Weather visuals illustrate scenarios; they do not represent a weather forecast.
+
+## Project and credits
+
+Built for **Claude Impact Lab #2, Nuremberg**, Track 2: Fraunhofer IIS Challenge. Team responsibilities and the execution plan appear in [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md).
+
+- Bayerische Vermessungsverwaltung: building, terrain, aerial, and parcel data, CC BY 4.0.
+- OpenStreetMap contributors: street and point-of-interest data, ODbL.
+- Destatis: Zensus 2022 data, dl-de/by-2-0.
+- VGN: public transport timetable data; see the dataset documentation for source terms.
+
+The repository has no software license file. Dataset licenses apply to their respective data. Report bugs or suggest improvements through [GitHub issues](https://github.com/gi60wedo/claude_imapct_lab/issues).
