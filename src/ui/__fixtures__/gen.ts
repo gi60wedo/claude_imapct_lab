@@ -1,9 +1,10 @@
 import { writeFileSync, readFileSync, mkdirSync } from 'fs';
-import { join } from 'path';
-import type { Candidate, Brief, SimulationResult, Scenario, TimeSlice, PersonaId, Bottleneck } from '../../contracts';
+import { join, resolve } from 'path';
+import { fileURLToPath } from 'url';
+import type { Candidate, Brief, SimulationResult, Scenario, PersonaId, Bottleneck } from '../../contracts';
 
 // Seeded RNG for deterministic fixtures
-function mulberry32(a: number) {
+export function mulberry32(a: number) {
   return function () {
     a |= 0; a = (a + 0x6d2b79f5) | 0;
     let t = Math.imul(a ^ (a >>> 15), 1 | a);
@@ -13,7 +14,7 @@ function mulberry32(a: number) {
 }
 
 type LngLat = [number, number];
-type Path = LngLat & { tSec?: number };
+type FootwayNode = { point: LngLat; neighbors: number[] };
 
 // Load footways or parse from altstadt.json
 function loadFootways(): LngLat[][] {
@@ -37,46 +38,91 @@ function loadFootways(): LngLat[][] {
   return footways;
 }
 
-function distance(a: LngLat, b: LngLat): number {
-  const dx = a[0] - b[0], dy = a[1] - b[1];
+function distanceM(a: LngLat, b: LngLat): number {
+  const metresPerDegree = Math.PI * 6371000 / 180;
+  const dx = (a[0] - b[0]) * metresPerDegree * Math.cos((a[1] + b[1]) * Math.PI / 360);
+  const dy = (a[1] - b[1]) * metresPerDegree;
   return Math.sqrt(dx * dx + dy * dy);
 }
 
-// Find footway segment near a point
-function findNearbyFootwaySegment(rng: ReturnType<typeof mulberry32>, point: LngLat, footways: LngLat[][]): LngLat[] {
-  const candidates: LngLat[][] = [];
-  for (const way of footways) {
-    for (let i = 0; i < way.length - 1; i++) {
-      if (distance(way[i], point) < 0.003) {
-        candidates.push([way[i], way[i + 1]]);
+// Each polyline vertex is a node; nearby vertices share a node within 2 metres.
+export function buildFootwayGraph(footways: LngLat[][]): FootwayNode[] {
+  const nodes: FootwayNode[] = [];
+  const cells = new Map<string, number[]>();
+  const metresPerDegree = Math.PI * 6371000 / 180;
+  const longitudeScale = metresPerDegree * Math.cos((footways[0]?.[0]?.[1] ?? 0) * Math.PI / 180);
+  const snapM = 2;
+
+  function nodeId(point: LngLat): number {
+    const x = Math.floor(point[0] * longitudeScale / snapM);
+    const y = Math.floor(point[1] * metresPerDegree / snapM);
+    let nearest = -1;
+    let nearestDistance = snapM;
+    for (let dx = -1; dx <= 1; dx++) {
+      for (let dy = -1; dy <= 1; dy++) {
+        for (const id of cells.get(`${x + dx},${y + dy}`) ?? []) {
+          const distance = distanceM(point, nodes[id].point);
+          if (distance <= nearestDistance) {
+            nearest = id;
+            nearestDistance = distance;
+          }
+        }
       }
     }
+    if (nearest !== -1) return nearest;
+    const id = nodes.length;
+    nodes.push({ point, neighbors: [] });
+    const key = `${x},${y}`;
+    const bucket = cells.get(key) ?? [];
+    bucket.push(id);
+    cells.set(key, bucket);
+    return id;
   }
-  return candidates.length > 0 ? candidates[Math.floor(rng() * candidates.length)] : [point, [point[0] + 0.0001, point[1] + 0.0001]];
+
+  for (const way of footways) {
+    const ids = way.map(nodeId);
+    for (let i = 1; i < ids.length; i++) {
+      const from = ids[i - 1], to = ids[i];
+      if (from === to) continue;
+      if (!nodes[from].neighbors.includes(to)) nodes[from].neighbors.push(to);
+      if (!nodes[to].neighbors.includes(from)) nodes[to].neighbors.push(from);
+    }
+  }
+  return nodes;
 }
 
-// Generate a trip path following footway geometry
-function generateTripPath(rng: ReturnType<typeof mulberry32>, startPoint: LngLat, footways: LngLat[][], duration: number, speed: number = 0.0001): LngLat[] {
-  const path: LngLat[] = [startPoint];
-  let current = startPoint;
-  let t = 0;
-  const maxTime = 3600;
-
-  while (t < maxTime && path.length < 50) {
-    const segment = findNearbyFootwaySegment(rng, current, footways);
-    const segmentDist = distance(segment[0], segment[1]);
-    const steps = Math.max(1, Math.floor(segmentDist / (speed * 5)));
-
-    for (let i = 1; i <= steps && t < maxTime; i++) {
-      const alpha = i / steps;
-      const next: LngLat = [
-        segment[0][0] + (segment[1][0] - segment[0][0]) * alpha,
-        segment[0][1] + (segment[1][1] - segment[0][1]) * alpha,
-      ];
-      path.push(next);
-      t = Math.min(t + 30, maxTime); // 30-second steps, capped at 3600
+// Snap the start onto the graph and walk only through adjacent nodes.
+export function generateTripPath(rng: ReturnType<typeof mulberry32>, startPoint: LngLat, nodes: FootwayNode[], duration: number): LngLat[] {
+  let current = -1;
+  let nearestDistance = Infinity;
+  nodes.forEach((node, id) => {
+    const distance = distanceM(startPoint, node.point);
+    if (node.neighbors.length > 0 && distance < nearestDistance) {
+      current = id;
+      nearestDistance = distance;
     }
-    current = segment[1];
+  });
+  if (current === -1) throw new Error('Footway graph has no connected edges');
+
+  const path: LngLat[] = [nodes[current].point];
+  const maxPoints = Math.min(50, Math.floor(duration / 30) + 1);
+  let previous = -1;
+  while (path.length < maxPoints) {
+    const neighbors = nodes[current].neighbors;
+    const forward = neighbors.filter((id) => id !== previous);
+    const choices = forward.length > 0 ? forward : neighbors;
+    const next = choices[Math.floor(rng() * choices.length)];
+    const from = nodes[current].point, to = nodes[next].point;
+    const steps = Math.max(1, Math.ceil(distanceM(from, to) / 40));
+    for (let i = 1; i <= steps && path.length < maxPoints; i++) {
+      const alpha = i / steps;
+      path.push([
+        from[0] + (to[0] - from[0]) * alpha,
+        from[1] + (to[1] - from[1]) * alpha,
+      ]);
+    }
+    previous = current;
+    current = next;
   }
 
   return path;
@@ -237,6 +283,19 @@ function generateCandidates(rng: ReturnType<typeof mulberry32>): Candidate[] {
 
     if (!passedFilter) {
       candidate.rejectReason = rejectReasons[rejectReasonIndex % rejectReasons.length];
+      // Reuse the seeded values so assigning a reason does not change RNG consumption.
+      switch (candidate.rejectReason) {
+        case 'area < 800 m²':
+          candidate.areaM2 = Math.round(400 + (area - 1200) / 2800 * 399);
+          break;
+        case 'no stop within 400 m':
+          candidate.indicators.transitScore = Math.round((transitScore - 65) / 30 * 39);
+          break;
+        case 'no van route within 80 m':
+          candidate.indicators.deliveryAccess = false;
+          candidate.indicators.vanDistM = Math.max(81, candidate.indicators.vanDistM);
+          break;
+      }
       rejectReasonIndex++;
     }
 
@@ -251,7 +310,7 @@ function generateSimulationResult(
   scenario: Scenario,
   seed: number,
   candidate: Candidate,
-  footways: LngLat[][],
+  footways: FootwayNode[],
 ): SimulationResult {
   const rng = mulberry32(seed);
   const isRainy = scenario === 'RAINY_SAT';
@@ -340,7 +399,7 @@ function generateSimulationResult(
 
 async function main() {
   const rng = mulberry32(42);
-  const footways = loadFootways();
+  const footways = buildFootwayGraph(loadFootways());
   const candidates = generateCandidates(rng);
   const passingCandidates = candidates.filter((c) => c.passedFilter);
 
@@ -359,7 +418,6 @@ async function main() {
     const passingIds = new Set(passingCandidates.map((c) => c.id));
     for (const file of files) {
       if (file.startsWith('result-') && file.endsWith('.json')) {
-        const candidateId = file.replace(/^result-/, '').replace(/-SUNNY_SAT\.json$|^-RAINY_SAT\.json$/, '').replace(/-SUNNY_SAT\.json$|^-RAINY_SAT\.json$/, '');
         const parts = file.match(/^result-(.+)-(SUNNY_SAT|RAINY_SAT)\.json$/);
         if (parts) {
           const id = parts[1];
@@ -424,4 +482,9 @@ async function main() {
   console.log(`✓ Generated brief`);
 }
 
-main().catch(console.error);
+if (resolve(process.argv[1] ?? '') === fileURLToPath(import.meta.url)) {
+  main().catch((error) => {
+    console.error(error);
+    process.exitCode = 1;
+  });
+}

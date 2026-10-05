@@ -123,7 +123,7 @@
         49.455099999999995
       ]
     ],
-    "areaM2": 2883,
+    "areaM2": 640,
     "indicators": {
       "transitScore": 78,
       "walkScore": 91,
@@ -160,7 +160,7 @@
     ],
     "areaM2": 3623,
     "indicators": {
-      "transitScore": 79,
+      "transitScore": 18,
       "walkScore": 76,
       "population800m": 19056,
       "retailPoi400m": 42,
@@ -302,7 +302,7 @@
       "population800m": 13961,
       "retailPoi400m": 39,
       "attractions400m": 8,
-      "deliveryAccess": true,
+      "deliveryAccess": false,
       "vanDistM": 235
     },
     "passedFilter": false,
@@ -330,7 +330,7 @@
         49.4526
       ]
     ],
-    "areaM2": 3604,
+    "areaM2": 743,
     "indicators": {
       "transitScore": 80,
       "walkScore": 75,
@@ -367,7 +367,7 @@
     ],
     "areaM2": 3141,
     "indicators": {
-      "transitScore": 93,
+      "transitScore": 36,
       "walkScore": 72,
       "population800m": 19550,
       "retailPoi400m": 33,
@@ -435,7 +435,7 @@
         49.455999999999996
       ]
     ],
-    "areaM2": 1979,
+    "areaM2": 511,
     "indicators": {
       "transitScore": 86,
       "walkScore": 74,
@@ -472,7 +472,7 @@
     ],
     "areaM2": 3765,
     "indicators": {
-      "transitScore": 78,
+      "transitScore": 17,
       "walkScore": 84,
       "population800m": 14696,
       "retailPoi400m": 38,
@@ -540,7 +540,7 @@
         49.4505
       ]
     ],
-    "areaM2": 1482,
+    "areaM2": 440,
     "indicators": {
       "transitScore": 86,
       "walkScore": 78,
@@ -577,7 +577,7 @@
     ],
     "areaM2": 1564,
     "indicators": {
-      "transitScore": 94,
+      "transitScore": 38,
       "walkScore": 74,
       "population800m": 17675,
       "retailPoi400m": 41,
