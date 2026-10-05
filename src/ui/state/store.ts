@@ -5,6 +5,15 @@ export const DEFAULT_WEIGHTS: Weights = {
   accessibility: 0.3, footfall: 0.25, fairness: 0.2, localBusiness: 0.15, walkability: 0.1,
 };
 
+/** Provenance of the live Claude output, shown beside the brief. */
+export interface BriefMeta {
+  source: 'claude' | 'cache' | 'cache-latest' | 'template';
+  ms: number;
+  /** "What changed and why" after a scenario or mitigation change. */
+  delta?: string;
+  mitigation?: { id: string; rationale: string; source: 'claude' | 'template' };
+}
+
 export interface UiState {
   candidates: Candidate[];
   /** Keyed by `${candidateId}:${scenario}`; use resultKey(). */
@@ -15,6 +24,7 @@ export interface UiState {
   selectedId: string | null;
   compareIds: string[];
   brief: Brief | null;
+  briefMeta: BriefMeta | null;
   loading: boolean;
   playing: boolean;
   timeSec: number;
@@ -24,7 +34,7 @@ export const resultKey = (candidateId: string, scenario: Scenario) => `${candida
 
 let state: UiState = {
   candidates: [], results: {}, weights: DEFAULT_WEIGHTS, scenario: 'SUNNY_SAT', slice: '11:30_PEAK',
-  selectedId: null, compareIds: [], brief: null, loading: false, playing: false, timeSec: 0,
+  selectedId: null, compareIds: [], brief: null, briefMeta: null, loading: false, playing: false, timeSec: 0,
 };
 const listeners = new Set<() => void>();
 

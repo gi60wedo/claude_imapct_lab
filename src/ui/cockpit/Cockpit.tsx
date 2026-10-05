@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import type { PersonaId, SimulationResult, Weights } from '../../contracts';
-import { sim } from '../adapters';
+import { LIVE_BRIEF, sim } from '../adapters';
+import { applyLiveMitigation } from '../live/live';
 import { currentResults, resultKey, setState, useStore } from '../state/store';
 
 const PERSONAS: { id: PersonaId; label: string; text: string; border: string }[] = [
@@ -53,6 +54,7 @@ export default function Cockpit() {
   const scenario = useStore((s) => s.scenario);
   const weights = useStore((s) => s.weights);
   const brief = useStore((s) => s.brief);
+  const meta = useStore((s) => s.briefMeta);
   const result = useStore((s) => (s.selectedId ? currentResults(s)[s.selectedId] : undefined));
   const name = useStore((s) => s.candidates.find((c) => c.id === s.selectedId)?.name);
   const [busy, setBusy] = useState(false);
@@ -71,6 +73,7 @@ export default function Cockpit() {
     setBusy(true);
     setError(null);
     try {
+      if (LIVE_BRIEF) { await applyLiveMitigation(selectedId); return; }
       const next = await sim.run(selectedId, scenario, brief.losers.map((l) => l.mitigation), result.seed);
       setState((s) => ({ results: { ...s.results, [resultKey(next.candidateId, next.scenario)]: next } }));
     } catch (e) {
@@ -127,6 +130,17 @@ export default function Cockpit() {
       {brief && (
         <section className="rounded border border-border bg-surface p-2" data-testid="brief">
           <div className="font-medium">Recommended: {brief.recommended}</div>
+          {meta && (
+            <div className="text-[11px] text-muted" data-testid="brief-source">
+              {meta.source === 'claude' ? `Claude · ${(meta.ms / 1000).toFixed(1)} s` : meta.source === 'template' ? 'offline summary from engine numbers' : 'cached brief'}
+            </div>
+          )}
+          {meta?.delta && <p className="mt-1 text-xs italic" data-testid="brief-delta">{meta.delta}</p>}
+          {meta?.mitigation && (
+            <p className="mt-1 text-xs" data-testid="mitigation-note">
+              <b>{meta.mitigation.id}</b>: {meta.mitigation.rationale}
+            </p>
+          )}
           <ul className="mt-1 list-disc pl-4 text-xs">
             {brief.why.map((w, i) => <li key={i}>{w}</li>)}
           </ul>
