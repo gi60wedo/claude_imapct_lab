@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve as resolvePath } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import type { PersonaId, SimulationResult } from '../../contracts';
+import type { Bottleneck, PersonaId, SimulationResult, TimeSlice } from '../../contracts';
 import {
   distanceToPolylineM,
   graphNodesOf,
@@ -13,7 +13,7 @@ import {
   pickHeroes,
   tripPositionAt,
 } from './heroes';
-import type { HeroRule, SceneAssets } from './types';
+import type { HeroId, HeroRule, SceneAssets } from './types';
 
 type Trip = SimulationResult['trips'][number];
 type LngLatPoint = [number, number];
@@ -171,33 +171,120 @@ describe('hero rules', () => {
     });
   });
 
-  it('picks the same hero from the committed fixture on every call', () => {
-    const fixture = JSON.parse(
-      readFileSync(resolvePath(process.cwd(), 'public/data/fixtures/result-KAUFHOF-RAINY_SAT.json'), 'utf8'),
-    ) as SimulationResult;
-    const rule: HeroRule = { ...markus, type: 'CROWDING' };
-    const pick = pickHero(rule, fixture, assets);
-    expect(pick).not.toBeNull();
-    expect(fixture.trips[pick!.tripIndex].persona).toBe('vendor');
-    const b = fixture.bySlice['05:30_DELIVERY'].bottlenecks.find((x) => x.type === 'CROWDING')!;
-    const lastOf = (t: Trip) => t.path[t.path.length - 1];
-    const dist = (t: Trip) => haversineM([lastOf(t)[0], lastOf(t)[1]], [b.lng, b.lat]);
-    const best = Math.min(...fixture.trips.filter((t) => t.persona === 'vendor').map(dist));
-    expect(dist(fixture.trips[pick!.tripIndex])).toBe(best);
-    expect(pickHero(rule, fixture, assets)).toEqual(pick);
+  it('picks Markus by every bottleneck type the committed fixture reports', () => {
+    let checked = 0;
+    for (const slice of SLICES) {
+      for (const type of new Set(fixture.bySlice[slice].bottlenecks.map((b) => b.type))) {
+        const rule: HeroRule = { ...markus, slice, type };
+        const want = oracleNearestBottleneck(fixture, 'vendor', slice, type);
+        if (want === undefined) continue;
+        expect(pickHero(rule, fixture, assets), `${slice} ${type}`).toEqual(asPick('markus', want));
+        expect(pickHero(rule, fixture, assets)).toEqual(pickHero(rule, fixture, assets));
+        checked++;
+      }
+    }
+    expect(checked).toBeGreaterThan(0);
   });
 });
+
+/* ------------------------------------------------------------------------ */
+/* Independent oracle for the fixture tests                                  */
+/* ------------------------------------------------------------------------ */
+
+/**
+ * The oracle re-derives each hero rule from the raw trips without heroes.ts,
+ * so the expected heroes follow the fixture when it is regenerated. A case is
+ * `undefined` (skipped) when two keys sit so close that float detail could
+ * flip the pick between the oracle and the implementation.
+ */
+const fixture = JSON.parse(
+  readFileSync(resolvePath(process.cwd(), 'public/data/fixtures/result-KAUFHOF-RAINY_SAT.json'), 'utf8'),
+) as SimulationResult;
+
+const SLICES: readonly TimeSlice[] = ['05:30_DELIVERY', '11:30_PEAK', '15:00_LULL'];
+const BOTTLENECK_TYPES: readonly Bottleneck['type'][] = ['BOLLARD_BLOCKAGE', 'COBBLESTONE_FRICTION', 'ELEVATOR_CONGESTION', 'CROWDING'];
+const R_M = 6_371_008.8;
+const DEG = Math.PI / 180;
+const EPS_M = 1e-3;
+
+const firstOf = (t: Trip): LngLatPoint => [t.path[0][0], t.path[0][1]];
+const lastOf = (t: Trip): LngLatPoint => [t.path[t.path.length - 1][0], t.path[t.path.length - 1][1]];
+const startOf = (t: Trip) => t.path[0][2];
+const durationOf = (t: Trip) => t.path[t.path.length - 1][2] - t.path[0][2];
+const asPick = (hero: HeroId, i: number | null) => (i === null ? null : { hero, tripIndex: i });
+
+function oracleDistM(p: LngLatPoint, q: LngLatPoint): number {
+  const s =
+    Math.sin(((q[1] - p[1]) * DEG) / 2) ** 2 +
+    Math.cos(p[1] * DEG) * Math.cos(q[1] * DEG) * Math.sin(((q[0] - p[0]) * DEG) / 2) ** 2;
+  return 2 * R_M * Math.asin(Math.sqrt(s));
+}
+
+/** Distance from `p` to a trip's polyline, measured in a flat metre frame centred on `p`. */
+function oraclePathDistM(t: Trip, p: LngLatPoint): number {
+  const xy = t.path.map((q) => [(q[0] - p[0]) * DEG * R_M * Math.cos(p[1] * DEG), (q[1] - p[1]) * DEG * R_M]);
+  if (xy.length === 1) return Math.hypot(xy[0][0], xy[0][1]);
+  let best = Infinity;
+  for (let i = 1; i < xy.length; i++) {
+    const [ax, ay] = xy[i - 1];
+    const dx = xy[i][0] - ax;
+    const dy = xy[i][1] - ay;
+    const len2 = dx * dx + dy * dy;
+    const f = len2 === 0 ? 0 : Math.min(1, Math.max(0, -(ax * dx + ay * dy) / len2));
+    best = Math.min(best, Math.hypot(ax + f * dx, ay + f * dy));
+  }
+  return best;
+}
+
+/** Ascending indices of non-empty trips of one persona. */
+const tripsOf = (r: SimulationResult, persona: PersonaId) =>
+  r.trips.flatMap((t, i) => (t.persona === persona && t.path.length > 0 ? [i] : []));
+
+/** Lowest index with the smallest key; `undefined` when another key lies within `eps` of it. */
+function oracleArgMin(pool: number[], key: (i: number) => number, eps = EPS_M): number | null | undefined {
+  if (!pool.length) return null;
+  const keys = pool.map(key);
+  const best = Math.min(...keys);
+  if (keys.some((k) => k !== best && k - best <= eps)) return undefined;
+  return pool[keys.indexOf(best)];
+}
+
+function oracleNearestBottleneck(r: SimulationResult, persona: PersonaId, slice: TimeSlice, type: Bottleneck['type']) {
+  const b = r.bySlice[slice].bottlenecks.find((x) => x.type === type);
+  if (!b) return null;
+  return oracleArgMin(tripsOf(r, persona), (i) => oracleDistM(lastOf(r.trips[i]), [b.lng, b.lat]));
+}
+
+function oracleNearestNode(r: SimulationResult, persona: PersonaId, pts: LngLatPoint[]) {
+  if (!pts.length) return null;
+  return oracleArgMin(tripsOf(r, persona), (i) => Math.min(...pts.map((p) => oracleDistM(lastOf(r.trips[i]), p))));
+}
+
+/** Trips of `persona` passing within `withinM` of a point; `undefined` when one sits on the radius. */
+function oraclePassing(r: SimulationResult, persona: PersonaId, pts: LngLatPoint[], withinM: number): number[] | undefined {
+  const pool = tripsOf(r, persona);
+  const d = pool.map((i) => Math.min(...pts.map((p) => oraclePathDistM(r.trips[i], p))));
+  if (d.some((x) => x !== 0 && Math.abs(x - withinM) <= EPS_M)) return undefined;
+  return pool.filter((_, k) => d[k] <= withinM);
+}
+
+function oracleEarliestPassing(r: SimulationResult, persona: PersonaId, pts: LngLatPoint[], withinM: number) {
+  if (!pts.length) return null;
+  const passing = oraclePassing(r, persona, pts, withinM);
+  return passing && oracleArgMin(passing, (i) => startOf(r.trips[i]));
+}
+
+function oracleLongest(r: SimulationResult, persona: PersonaId, [w0, w1]: readonly [number, number]) {
+  const pool = tripsOf(r, persona).filter((i) => startOf(r.trips[i]) >= w0 && startOf(r.trips[i]) <= w1);
+  return oracleArgMin(pool, (i) => -durationOf(r.trips[i]));
+}
 
 /**
  * Scene 2 rules on the committed Kaufhof fixture. No `graph.json` nodes are
  * committed, so each test places elevator and loading nodes on points of the
- * fixture's own trips. Every fixture trip starts at the same origin. The
- * expected indices come from the fixture data and change only when it does.
+ * fixture's own trips and compares every pick with the oracle above.
  */
 describe('hero rules on the Kaufhof RAINY_SAT fixture', () => {
-  const fixture = JSON.parse(
-    readFileSync(resolvePath(process.cwd(), 'public/data/fixtures/result-KAUFHOF-RAINY_SAT.json'), 'utf8'),
-  ) as SimulationResult;
   const helga: HeroRule = { hero: 'helga', persona: 'senior', pick: 'earliestPassingNode', node: 'elevator', withinM: 5 };
   const lukas: HeroRule = { hero: 'lukas', persona: 'commuter', pick: 'longestInWindow', window: [41400, 43200] };
   const markus: HeroRule = { hero: 'markus', persona: 'vendor', pick: 'lastPointNearestNode', node: 'loading' };
@@ -206,92 +293,166 @@ describe('hero rules on the Kaufhof RAINY_SAT fixture', () => {
     arrivals: null,
     graphNodes: points.map(([lng, lat], i) => ({ id: `${role}${i}`, lng, lat, role })),
   });
-  const firstPoint = (i: number): LngLatPoint => [fixture.trips[i].path[0][0], fixture.trips[i].path[0][1]];
-  const lastPoint = (i: number): LngLatPoint => {
-    const p = fixture.trips[i].path[fixture.trips[i].path.length - 1];
-    return [p[0], p[1]];
-  };
-  const start = (i: number) => fixture.trips[i].path[0][2];
-  const withExtra = (i: number): SimulationResult => ({ ...fixture, trips: [...fixture.trips, fixture.trips[i]] });
+  /** Node sites: every trip's first and last point. */
+  const sites: LngLatPoint[] = fixture.trips.flatMap((t) => [firstOf(t), lastOf(t)]);
+  const seniors = tripsOf(fixture, 'senior');
+  const vendors = tripsOf(fixture, 'vendor');
+  const commuters = tripsOf(fixture, 'commuter');
+  /** The fixture with a copy of trip `i` placed first or last. */
+  const withCopy = (i: number, at: 'first' | 'last'): SimulationResult => ({
+    ...fixture,
+    trips: at === 'first' ? [fixture.trips[i], ...fixture.trips] : [...fixture.trips, fixture.trips[i]],
+  });
+
+  it('has trips of every scene 2 persona', () => {
+    expect(seniors.length).toBeGreaterThan(1);
+    expect(vendors.length).toBeGreaterThan(1);
+    expect(commuters.length).toBeGreaterThan(1);
+  });
 
   it('picks Helga as the earliest-starting senior passing an elevator', () => {
-    // Every senior passes the shared origin. Trip 88 starts first, though trip 7 is the lowest senior index.
-    expect(pickHero(helga, fixture, nodes('elevator', firstPoint(88)))).toEqual({ hero: 'helga', tripIndex: 88 });
-    expect(start(88)).toBeLessThan(start(7));
-    // Seniors 65, 126 and 68 pass the end of trip 68. Trip 65 starts first.
-    expect(pickHero(helga, fixture, nodes('elevator', lastPoint(68)))).toEqual({ hero: 'helga', tripIndex: 65 });
+    let checked = 0;
+    let startBeatsIndex = 0;
+    for (const p of sites) {
+      const passing = oraclePassing(fixture, 'senior', [p], helga.withinM);
+      const want = passing && oracleArgMin(passing, (i) => startOf(fixture.trips[i]));
+      if (want === undefined) continue;
+      expect(pickHero(helga, fixture, nodes('elevator', p)), `elevator at ${p}`).toEqual(asPick('helga', want));
+      checked++;
+      if (want !== null && want !== passing![0]) startBeatsIndex++;
+    }
+    expect(checked).toBeGreaterThan(sites.length / 2);
+    // The fixture exercises start order: some picks are not the lowest passing index.
+    expect(startBeatsIndex).toBeGreaterThan(0);
   });
 
   it('applies withinM as an inclusive radius on the fixture paths', () => {
-    // Trip 88 passes 4.08 m from the end of trip 60; trip 64 runs through it and starts later.
-    const elevator = nodes('elevator', lastPoint(60));
-    expect(pickHero(helga, fixture, elevator)).toEqual({ hero: 'helga', tripIndex: 88 });
-    expect(pickHero({ ...helga, withinM: 4 }, fixture, elevator)).toEqual({ hero: 'helga', tripIndex: 64 });
+    // A senior's own first point lies at 0 m, so a zero radius still admits it.
+    const first = oracleArgMin(seniors, (i) => startOf(fixture.trips[i]))!;
+    const origin = firstOf(fixture.trips[first]);
+    expect(oracleEarliestPassing(fixture, 'senior', [origin], 0)).toBe(first);
+    expect(pickHero({ ...helga, withinM: 0 }, fixture, nodes('elevator', origin))).toEqual(asPick('helga', first));
+
+    // Growing the radius past one senior's distance swaps the pick to that senior.
+    let checked = 0;
+    for (const p of sites) {
+      const d = seniors.map((i) => oraclePathDistM(fixture.trips[i], p));
+      d.forEach((dk, k) => {
+        if (dk < 1 || dk > 20 || d.some((x, j) => j !== k && Math.abs(x - dk) <= 0.5)) return;
+        const wide = oracleEarliestPassing(fixture, 'senior', [p], dk + 0.25);
+        const narrow = oracleEarliestPassing(fixture, 'senior', [p], dk - 0.25);
+        if (wide !== seniors[k] || narrow === undefined) return;
+        expect(pickHero({ ...helga, withinM: dk + 0.25 }, fixture, nodes('elevator', p))).toEqual(asPick('helga', wide));
+        expect(pickHero({ ...helga, withinM: dk - 0.25 }, fixture, nodes('elevator', p))).toEqual(asPick('helga', narrow));
+        checked++;
+      });
+    }
+    expect(checked).toBeGreaterThan(0);
   });
 
   it('breaks a Helga start-time tie by the lowest trip index', () => {
-    const twin = withExtra(65);
-    expect(pickHero(helga, twin, nodes('elevator', lastPoint(68)))).toEqual({ hero: 'helga', tripIndex: 65 });
+    const want = oracleArgMin(seniors, (i) => startOf(fixture.trips[i]))!;
+    const origin = firstOf(fixture.trips[want]);
+    // A copy of the winner ties on start time. The copy wins only when it has the lower index.
+    expect(pickHero(helga, withCopy(want, 'last'), nodes('elevator', origin))).toEqual(asPick('helga', want));
+    expect(pickHero(helga, withCopy(want, 'first'), nodes('elevator', origin))).toEqual(asPick('helga', 0));
   });
 
   it('leaves Helga null without an elevator node or with none in reach', () => {
-    expect(pickHero(helga, fixture, nodes('loading', lastPoint(68)))).toBeNull();
-    expect(pickHero(helga, fixture, nodes('elevator', [11.2, 49.5]))).toBeNull();
+    const far: LngLatPoint = [11.2, 49.5];
+    expect(pickHero(helga, fixture, nodes('loading', ...sites.slice(0, 4)))).toBeNull();
+    expect(oracleEarliestPassing(fixture, 'senior', [far], helga.withinM)).toBeNull();
+    expect(pickHero(helga, fixture, nodes('elevator', far))).toBeNull();
   });
 
   it('picks loading-point Markus as the vendor ending nearest a loading node', () => {
-    expect(pickHero(markus, fixture, nodes('loading', lastPoint(23)))).toEqual({ hero: 'markus', tripIndex: 23 });
-    expect(fixture.trips[23].persona).toBe('vendor');
+    let checked = 0;
+    sites.forEach((p, k) => {
+      const q = sites[(k + 7) % sites.length];
+      for (const pts of [[p], [p, q]]) {
+        const want = oracleNearestNode(fixture, 'vendor', pts);
+        if (want === undefined) continue;
+        expect(pickHero(markus, fixture, nodes('loading', ...pts)), `loading at ${pts}`).toEqual(asPick('markus', want));
+        checked++;
+      }
+    });
+    expect(checked).toBeGreaterThan(sites.length);
   });
 
   it('breaks a loading-point tie by the lowest trip index', () => {
-    // Vendors 98 and 125 end on the same point.
-    expect(lastPoint(125)).toEqual(lastPoint(98));
-    expect(pickHero(markus, fixture, nodes('loading', lastPoint(125)))).toEqual({ hero: 'markus', tripIndex: 98 });
-    // With two loading nodes, vendors 23, 98 and 125 all end on one.
-    expect(pickHero(markus, fixture, nodes('loading', lastPoint(98), lastPoint(23)))).toEqual({ hero: 'markus', tripIndex: 23 });
+    // Vendors that end on one point tie at 0 m; the lowest of them wins.
+    const byEnd = new Map<string, number[]>();
+    for (const i of vendors) byEnd.set(String(lastOf(fixture.trips[i])), [...(byEnd.get(String(lastOf(fixture.trips[i]))) ?? []), i]);
+    for (const group of byEnd.values()) {
+      expect(pickHero(markus, fixture, nodes('loading', lastOf(fixture.trips[group[0]])))).toEqual(asPick('markus', group[0]));
+    }
+    // A copy of a vendor ties with it. The copy wins only when it has the lower index.
+    const v = vendors[0];
+    const end = lastOf(fixture.trips[v]);
+    expect(pickHero(markus, withCopy(v, 'last'), nodes('loading', end))).toEqual(asPick('markus', byEnd.get(String(end))![0]));
+    expect(pickHero(markus, withCopy(v, 'first'), nodes('loading', end))).toEqual(asPick('markus', 0));
   });
 
   it('leaves Markus null without a loading node or a matching bottleneck', () => {
-    expect(pickHero(markus, fixture, nodes('elevator', lastPoint(23)))).toBeNull();
+    const end = lastOf(fixture.trips[vendors[0]]);
+    expect(pickHero(markus, fixture, nodes('elevator', end))).toBeNull();
     expect(pickHero(markus, fixture, { arrivals: null, graphNodes: null })).toBeNull();
-    const scene1: HeroRule = {
-      hero: 'markus', persona: 'vendor', pick: 'lastPointNearestBottleneck', slice: '05:30_DELIVERY', type: 'BOLLARD_BLOCKAGE',
-    };
-    expect(fixture.bySlice['05:30_DELIVERY'].bottlenecks.some((b) => b.type === 'BOLLARD_BLOCKAGE')).toBe(false);
-    expect(pickHero(scene1, fixture, nodes('loading', lastPoint(23)))).toBeNull();
+    const absent = SLICES.flatMap((slice) =>
+      BOTTLENECK_TYPES.filter((type) => !fixture.bySlice[slice].bottlenecks.some((b) => b.type === type)).map((type) => ({ slice, type })),
+    );
+    expect(absent.length).toBeGreaterThan(0);
+    for (const { slice, type } of absent) {
+      const rule: HeroRule = { hero: 'markus', persona: 'vendor', pick: 'lastPointNearestBottleneck', slice, type };
+      expect(pickHero(rule, fixture, nodes('loading', end)), `${slice} ${type}`).toBeNull();
+    }
   });
 
-  it('leaves Lukas null when no commuter starts in the 11:30 window', () => {
-    // The fixture's tSec runs from 0 and does not follow Q1, so no trip starts at 11:30.
-    const commuters = fixture.trips.filter((t) => t.persona === 'commuter');
-    expect(commuters.filter((t) => t.path[0][2] >= 41400 && t.path[0][2] <= 43200)).toEqual([]);
-    expect(pickHero(lukas, fixture, nodes('elevator'))).toBeNull();
+  it('picks Lukas as the longest commuter trip starting in a window', () => {
+    // The 11:30 window is in Q1 clock seconds. The oracle decides whether this fixture's time base reaches it.
+    expect(pickHero(lukas, fixture, nodes('elevator'))).toEqual(asPick('lukas', oracleLongest(fixture, 'commuter', lukas.window)!));
+    let checked = 0;
+    for (const i of commuters) {
+      const win = [startOf(fixture.trips[i]), startOf(fixture.trips[i]) + 300] as const;
+      const want = oracleLongest(fixture, 'commuter', win);
+      if (want === undefined) continue;
+      expect(pickHero({ ...lukas, window: win }, fixture, nodes('elevator')), `window ${win}`).toEqual(asPick('lukas', want));
+      checked++;
+    }
+    expect(checked).toBe(commuters.length);
+    const after = Math.max(...fixture.trips.map((t) => startOf(t))) + 1;
+    expect(pickHero({ ...lukas, window: [after, after + 3600] }, fixture, nodes('elevator'))).toBeNull();
   });
 
   it('breaks a Lukas duration tie by the lowest trip index', () => {
-    // Every fixture commuter trip lasts the same time.
-    const durations = new Set(fixture.trips.filter((t) => t.persona === 'commuter').map((t) => t.path[t.path.length - 1][2] - t.path[0][2]));
-    expect(durations.size).toBe(1);
-    // Commuters 2, 13, 19 and 40 start inside [200, 300].
-    expect(pickHero({ ...lukas, window: [200, 300] }, fixture, nodes('elevator'))).toEqual({ hero: 'lukas', tripIndex: 2 });
-    expect(pickHero({ ...lukas, window: [0, 3600] }, fixture, nodes('elevator'))).toEqual({ hero: 'lukas', tripIndex: 1 });
+    const starts = commuters.map((i) => startOf(fixture.trips[i]));
+    const win = [Math.min(...starts), Math.max(...starts)] as const;
+    const want = oracleLongest(fixture, 'commuter', win)!;
+    expect(pickHero({ ...lukas, window: win }, fixture, nodes('elevator'))).toEqual(asPick('lukas', want));
+    // A copy of the winner ties on duration. The copy wins only when it has the lower index.
+    expect(pickHero({ ...lukas, window: win }, withCopy(want, 'last'), nodes('elevator'))).toEqual(asPick('lukas', want));
+    expect(pickHero({ ...lukas, window: win }, withCopy(want, 'first'), nodes('elevator'))).toEqual(asPick('lukas', 0));
   });
 
   it('maps all three scene 2 heroes from one asset set', () => {
+    const elevator = lastOf(fixture.trips[seniors[0]]);
+    const loading = lastOf(fixture.trips[vendors[vendors.length - 1]]);
     const assets2: SceneAssets = {
       arrivals: null,
       graphNodes: [
-        { id: 'e0', lng: lastPoint(68)[0], lat: lastPoint(68)[1], role: 'elevator' },
-        { id: 'l0', lng: lastPoint(125)[0], lat: lastPoint(125)[1], role: 'loading' },
+        { id: 'e0', lng: elevator[0], lat: elevator[1], role: 'elevator' },
+        { id: 'l0', lng: loading[0], lat: loading[1], role: 'loading' },
       ],
     };
-    const rules = [helga, { ...lukas, window: [200, 300] } as HeroRule, markus];
-    expect(pickHeroes(rules, fixture, assets2)).toEqual({
-      markus: { hero: 'markus', tripIndex: 98 },
-      helga: { hero: 'helga', tripIndex: 65 },
-      lukas: { hero: 'lukas', tripIndex: 2 },
-    });
+    const starts = commuters.map((i) => startOf(fixture.trips[i]));
+    const win = [Math.min(...starts), Math.max(...starts)] as const;
+    const rules = [helga, { ...lukas, window: win } as HeroRule, markus];
+    const want = {
+      markus: asPick('markus', oracleNearestNode(fixture, 'vendor', [loading])!),
+      helga: asPick('helga', oracleEarliestPassing(fixture, 'senior', [elevator], helga.withinM)!),
+      lukas: asPick('lukas', oracleLongest(fixture, 'commuter', win)!),
+    };
+    expect(Object.values(want).every((p) => p !== null)).toBe(true);
+    expect(pickHeroes(rules, fixture, assets2)).toEqual(want);
     expect(pickHeroes(rules, fixture, assets2)).toEqual(pickHeroes(rules, fixture, assets2));
   });
 });
