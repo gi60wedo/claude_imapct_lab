@@ -75,11 +75,16 @@
  * - A path that hits `undefined`, `null`, `NaN`, an object or an array, or a
  *   selector with no match, renders `—` and records a `BindingError`. The
  *   director also logs it with `console.error`. It never substitutes a number.
- * - The HUD renders each binding as its own element carrying
- *   `data-bind="<path>"` (format suffix excluded). RZ-live checks
- *   `el.textContent === format(resolve(window.__scene.state.scope, path))`.
- *   For unrooted paths this equals the plan's
- *   `format(get(window.__scene.state.result, path))`.
+ * - The HUD renders each binding part of a `ResolvedCaption` as its own element
+ *   carrying `data-bind="<path>"` (format suffix excluded) and, when the
+ *   template names a format, `data-format="<format>"`. An absent `data-format`
+ *   means the default format. RZ-live reads each `ResolvedBindingPart` from
+ *   `window.__scene.state.captions` and checks, for its element,
+ *   `el.textContent === part.text` and
+ *   `part.text === formatBinding(resolve(state.scope, part.path), part.format)`
+ *   (see `FormatBinding`). This verifies `{x|clock}`, `{x|int}` and `{x|num1}`
+ *   from resolved state alone. For unrooted paths without a format this equals
+ *   the plan's `format(get(window.__scene.state.result, path))`.
  * - Literal text must contain no digit. RZ-static enforces this. Clock labels
  *   bind `{scene.simSec|clock}`. Line names such as the U-Bahn line bind from
  *   `assets.arrivals`.
@@ -229,17 +234,20 @@ export type SimpleLayerId =
   | 'terrain'
   | 'buildings'
   | 'candidateOutline'
-  | 'bollardMarkers'
   | 'arrivalTicks'
   | 'stepsEdges'
   | 'shelteredEdges'
-  | 'elevatorMarkers'
-  | 'loadingMarker'
-  | 'kioskMarkers'
   | 'rainOverlay';
 
+/**
+ * Point-marker layers. Each one also accepts a `PulseSpec`. Marker order is the
+ * layer's data order: `graph.json` nodes of the layer's role in file order, or
+ * kiosks in the order the Q4 helper returns them.
+ */
+export type MarkerLayerId = 'bollardMarkers' | 'elevatorMarkers' | 'loadingMarker' | 'kioskMarkers';
+
 /** Every scene layer id. `SceneState.layers` holds one entry per id. */
-export type SceneLayerId = SimpleLayerId | 'trips' | 'heatmap' | 'bottlenecks';
+export type SceneLayerId = SimpleLayerId | MarkerLayerId | 'trips' | 'heatmap' | 'bottlenecks' | 'heroProgress';
 
 /** Opacity ramp from the layer's previous opacity to the toggle's target. */
 export interface FadeSpec {
@@ -255,12 +263,46 @@ interface LayerToggleBase {
 }
 
 /**
+ * Which items of a marker or bottleneck layer pulse. The pulse radius and
+ * opacity derive from `tMs` and `periodMs` only.
+ */
+export type PulseSpec = {
+  /** One pulse cycle in scene time. The renderer picks a default when absent. */
+  periodMs?: SceneMs;
+} & (
+  /** Every item pulses for the whole time the layer is on. */
+  | { trigger: 'always' }
+  /**
+   * An item pulses while a hero passes it: the hero's interpolated position
+   * lay within `withinM` haversine metres of the item at some sim time in
+   * `[simSec - lingerSec, simSec]`. Pure in `simSec`, so `seek` stays pure.
+   * The hero must have a `HeroRule` in `SceneDef.heroes`. A hero with no pick
+   * pulses nothing.
+   */
+  | { trigger: 'heroNear'; hero: HeroId; withinM: number; lingerSec?: SimSec }
+);
+
+/**
+ * Where a hero progress ring takes its full-circle duration from. Elapsed
+ * time is `simSec` minus the hero trip's first `tSec`.
+ * TODO(subagent): contract needs a per-persona time budget (Lukas's lunch
+ * break) on `PersonaResult` or `SimulationResult`. Until then scenes use
+ * `tripDuration`.
+ */
+export type HeroProgressBudget =
+  /** The hero trip's last `tSec` minus its first `tSec`. */
+  | { kind: 'tripDuration' }
+  /** A binding path (grammar above, no format) that resolves to a duration in seconds. */
+  | { kind: 'binding'; path: string };
+
+/**
  * A change to one layer at a keyframe start. Toggles are deltas: the layer set
  * at keyframe `k` is the fold of toggles from keyframe 0 through `k`, in order.
  * A layer with no toggle so far is off. Folding from the start keeps `seek` pure.
  */
 export type LayerToggle =
   | (LayerToggleBase & { layer: SimpleLayerId })
+  | (LayerToggleBase & { layer: MarkerLayerId; pulse?: PulseSpec })
   | (LayerToggleBase & {
       layer: 'trips';
       /** Personas drawn, bottom to top in the fixed persona order. */
@@ -274,14 +316,47 @@ export type LayerToggle =
       slice: TimeSlice;
       /** Types shown. Absent means all types. */
       types?: readonly Bottleneck['type'][];
-      /** Pulse radius from `tMs`. */
-      pulse?: boolean;
+      /** Which bottlenecks pulse. Absent means none. */
+      pulse?: PulseSpec;
+    })
+  | (LayerToggleBase & {
+      /**
+       * A ring around a hero's interpolated position that fills as the hero
+       * spends its time budget. The ring shows no number or label.
+       */
+      layer: 'heroProgress';
+      hero: HeroId;
+      budget: HeroProgressBudget;
     });
 
-/** Resolved layer state the layer builders consume. */
+/** Pulse state at the current `tMs`, computed by the director from a `PulseSpec`. */
+export interface ResolvedPulse {
+  /** Position in the pulse cycle, in `[0, 1)`, from `tMs` and `periodMs`. */
+  phase: number;
+  /** Indices into the layer's item order that pulse now, ascending. */
+  active: readonly number[];
+}
+
+/** Progress ring state at the current `simSec`, computed by the director. */
+export interface ResolvedProgress {
+  hero: HeroId;
+  /** Ring centre `[lng, lat]`. `null` when the hero has no pick or no position. */
+  position: readonly [number, number] | null;
+  /** Elapsed share of the budget, clamped to `[0, 1]`. Drives geometry only, never text. */
+  fraction: number;
+}
+
+/**
+ * Resolved layer state the layer builders consume. Builders read `pulse` and
+ * `progress` as given and hold no scene- or hero-specific logic.
+ */
 export type ResolvedLayer = LayerToggle & {
   /** Opacity at the current `tMs`, after fades. 0 when off and fully faded. */
   currentOpacity: number;
+  /** Set when the toggle carries a `PulseSpec`, else `null`. */
+  pulseState: ResolvedPulse | null;
+  /** Set for `heroProgress`, else `null`. */
+  progress: ResolvedProgress | null;
 };
 
 /* ------------------------------------------------------------------------ */
@@ -317,14 +392,43 @@ export type CaptionPart =
   | { kind: 'text'; text: string }
   | { kind: 'binding'; path: string; format?: BindingFormat };
 
+/** A literal piece of a resolved caption. */
+export interface ResolvedTextPart {
+  kind: 'text';
+  text: string;
+}
+
+/**
+ * A formatted binding of a resolved caption. The HUD renders it as one element
+ * with `data-bind={path}` and, when `format` is set, `data-format={format}`.
+ */
+export interface ResolvedBindingPart {
+  kind: 'binding';
+  /** Formatted value, or `—` when the binding did not resolve. */
+  text: string;
+  /** Path as written in the template, format suffix excluded. */
+  path: string;
+  /** Format as written in the template. Absent means the default format. */
+  format?: BindingFormat;
+}
+
+export type ResolvedCaptionPart = ResolvedTextPart | ResolvedBindingPart;
+
+/**
+ * Formats a resolved binding value. `bind.ts` exports the one implementation.
+ * The HUD and the RZ-live check both use it. Returns `—` for values the
+ * grammar treats as unresolved.
+ */
+export type FormatBinding = (value: unknown, format?: BindingFormat) => string;
+
 /** A caption ready to render at the current `tMs`. */
 export interface ResolvedCaption {
   id: string;
   slot: CaptionSlot;
   persona?: PersonaId;
   opacity: number;
-  /** Text pieces and formatted binding values. `text` is `—` for unresolved bindings. */
-  parts: ReadonlyArray<{ text: string; path?: string }>;
+  /** Text pieces and formatted bindings in template order. */
+  parts: readonly ResolvedCaptionPart[];
 }
 
 /** An unresolved binding, also logged with `console.error`. */
@@ -430,6 +534,11 @@ export interface SceneDef {
   /** Seed for every `SimClient.run` call. Live and recorded runs share it. */
   seed: number;
   keyframes: readonly Keyframe[];
+  /**
+   * Hero rules, at most one per `HeroId`. Every hero named by a camera,
+   * anchor, `trips.highlight`, `heroNear` pulse or `heroProgress` toggle in
+   * `keyframes` needs a rule here.
+   */
   heroes: readonly HeroRule[];
 }
 
