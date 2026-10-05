@@ -1,7 +1,8 @@
 import type { ReactNode } from 'react';
 import type { PersonaId } from '../../contracts';
 import type { SceneState } from './types';
-import PersonaChip, { CaptionText, captionOpacity } from './PersonaChip';
+import { formatClock } from './bind';
+import PersonaChip, { CaptionText } from './PersonaChip';
 
 export interface SceneHUDProps {
   /** The director supplies scene state; the HUD never reads window.__scene. */
@@ -13,10 +14,10 @@ export interface SceneHUDProps {
 
 const personas: readonly PersonaId[] = ['senior', 'vendor', 'commuter', 'retailer'];
 
-function clock(simSec: number) {
-  if (!Number.isFinite(simSec)) return '—';
-  const minutes = Math.floor(simSec / 60);
-  return `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`;
+function errorMessage(error?: string) {
+  if (error?.startsWith('mitigation rerun failed:')) return 'Mitigation unavailable. Please try again.';
+  if (error?.startsWith('scene data failed to load:')) return 'Scene data unavailable. Please try again.';
+  return 'Scene unavailable. Please try again.';
 }
 
 /** Pure presentation of director-resolved values, including before/after bindings. */
@@ -28,7 +29,8 @@ export function SceneHUD({ state, onApply, applySlot }: SceneHUDProps) {
     || !c.persona);
   const renderSlot = (slot: string) => ungrouped.filter((c) => c.slot === slot).map((caption) => (
     <p key={caption.id} data-caption-id={caption.id}
-      className={`break-words ${captionOpacity(caption.opacity)} ${slot === 'title'
+      style={{ opacity: caption.opacity }}
+      className={`break-words ${slot === 'title'
         ? 'text-4xl font-semibold' : 'text-xl tabular-nums'}`}>
       <CaptionText caption={caption} />
     </p>
@@ -42,7 +44,7 @@ export function SceneHUD({ state, onApply, applySlot }: SceneHUDProps) {
           {renderSlot('title')}{renderSlot('subtitle')}
         </div>
         {scope && <div className="flex flex-wrap items-center gap-3 rounded-xl border border-border bg-background/95 p-4 text-lg tabular-nums">
-          <span aria-label="Simulation clock" data-bind="scene.simSec" data-format="clock">{clock(scope.scene.simSec)}</span>
+          <span aria-label="Simulation clock" data-bind="scene.simSec" data-format="clock">{formatClock(scope.scene.simSec)}</span>
           <span>Seed <span data-bind="scene.seed" data-format="text">{String(scope.scene.seed)}</span></span>
           <span data-bind="scene.scenario" data-format="text">{scope.scene.scenario}</span>
           <span>engine output</span>
@@ -72,7 +74,7 @@ export function SceneHUD({ state, onApply, applySlot }: SceneHUDProps) {
           </div>}
         </footer>
         {phase === 'loading' && <p role="status" className="rounded-xl bg-background/95 p-4">Loading engine output…</p>}
-        {phase === 'error' && <p role="alert" className="rounded-xl border border-vendor bg-background/95 p-4">{state.error ?? 'Scene unavailable'}</p>}
+        {phase === 'error' && <p role="alert" className="rounded-xl border border-vendor bg-background/95 p-4">{errorMessage(state.error)}</p>}
       </div>
     </div>
   );

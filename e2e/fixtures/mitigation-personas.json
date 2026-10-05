@@ -1,0 +1,26 @@
+{
+  "senior": {
+    "score": 37,
+    "served": 91,
+    "droppedOut": 18,
+    "topFriction": "wet surfaces"
+  },
+  "vendor": {
+    "score": 36,
+    "served": 81,
+    "droppedOut": 13,
+    "topFriction": "crowded paths"
+  },
+  "commuter": {
+    "score": 17,
+    "served": 93,
+    "droppedOut": 19,
+    "topFriction": "steps without elevator"
+  },
+  "retailer": {
+    "score": 78,
+    "served": 90,
+    "droppedOut": 5,
+    "topFriction": "steps without elevator"
+  }
+}
