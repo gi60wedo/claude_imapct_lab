@@ -1,0 +1,77 @@
+{
+  "bounds": [
+    11.063765659970944,
+    49.442912805342196,
+    11.093534201699637,
+    49.46231975486977
+  ],
+  "baseElevation": 290,
+  "elevationDecoder": {
+    "rScaler": 256,
+    "gScaler": 1,
+    "bScaler": 0.00390625,
+    "offset": -32768
+  },
+  "crs": "EPSG:4326",
+  "sourceCrs": "EPSG:25832",
+  "verticalDatum": "DHHN2016",
+  "sourceBounds": [
+    649600.0,
+    5478800.0,
+    651700.0,
+    5480900.0
+  ],
+  "pixelOrigin": "loader-vertex",
+  "rowOrder": "north-to-south",
+  "studyGeographicBounds": [
+    11.063772924134373,
+    49.442917541054626,
+    11.093526937536208,
+    49.46231501915734
+  ],
+  "meshConvention": {
+    "loader": "@loaders.gl/terrain getMeshAttributes",
+    "longitude": "west + i * (east - west) / width",
+    "latitude": "north - j * (north - south) / height",
+    "uv": "[i / width, j / height]",
+    "border": "martini duplicates the last row/column at height/width"
+  },
+  "elevation": {
+    "url": "/data/terrain/elevation.png",
+    "width": 2048,
+    "height": 2048,
+    "pixelOrigin": "loader-vertex"
+  },
+  "texture": {
+    "url": "/data/terrain/texture.jpg",
+    "width": 4096,
+    "height": 4096,
+    "quality": 82,
+    "outsideSourceBounds": "nearest-edge extension",
+    "pixelOrigin": "center",
+    "filter": "box",
+    "supersampling": 3
+  },
+  "heightGrid": {
+    "url": "/data/terrain/heightgrid.bin",
+    "width": 540,
+    "height": 540,
+    "dtype": "float32",
+    "endianness": "little",
+    "layout": "row-major",
+    "rowOrder": "north-to-south",
+    "pixelOrigin": "center",
+    "units": "meters",
+    "relativeToBaseElevation": true,
+    "cellSizeMeters": [
+      3.9978480732548247,
+      3.9970588377972986
+    ],
+    "aggregation": "maximum of intersecting DGM1 cells and LoD2 building tops",
+    "buildingTop": "groundZ + measuredHeight - baseElevation",
+    "buildingCount": 26012,
+    "safetyHaloCells": 1,
+    "sampling": "cell lookup or bilinear; conservative maximum halo"
+  },
+  "attribution": "Datenquelle: Bayerische Vermessungsverwaltung \u2013 www.geodaten.bayern.de, CC BY 4.0"
+}
