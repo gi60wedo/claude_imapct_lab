@@ -12,14 +12,13 @@ export type Speed = (typeof SPEEDS)[number];
 export const DEFAULT_SPEED: Speed = 60;
 
 /**
- * Trips the live view asks the engine for. bench.test.ts on public/data/world.json (node, SUNNY_SAT)
+ * Trips the live view asks the engine for: the capacity of the instanced agent dots (one dot per
+ * trip, see Trips in three/layers.tsx). bench.test.ts on public/data/world.json (node, SUNNY_SAT)
  * measured 36–68 ms per simulate for maxTrips 100, 300, 1000 and 2000, far under the 1.5 s worker
- * budget, so the live view takes the 2000 ceiling the instanced dots are sized for. The engine
- * samples only vendor, senior and commuter trips, so a benchmark site returns 151–270 trips at any
- * maxTrips above 300.
- * TODO(subagent): engine needs visitor/passer trips in sampleTrips to fill the 2000 budget.
+ * budget; rerun it with BENCH=1 once the engine returns full-scale runs. With vendor, senior and
+ * commuter trips only, a benchmark site returned 151–270 trips at any maxTrips above 300.
  */
-export const LIVE_MAX_TRIPS = 2000;
+export const LIVE_MAX_TRIPS = 3000;
 
 /** A wall-clock frame gap above this (background tab, debugger) advances the clock by this much only. */
 const MAX_FRAME_SEC = 0.25;

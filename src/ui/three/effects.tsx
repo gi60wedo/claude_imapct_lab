@@ -1,35 +1,24 @@
-// Post-processing and adaptive resolution. High: MSAA, N8AO ambient occlusion, bloom, ACES tone
-// mapping, vignette. Fast: SMAA instead of MSAA and no AO. Bloom is selective by luminance: only
-// HDR materials (site outline, trips, heat, bottlenecks, the selected block's edges) exceed the
-// threshold, while lit buildings and terrain stay below it.
+// Post-processing and adaptive resolution for the monochrome map. High: MSAA and soft N8AO
+// ambient occlusion. Fast: SMAA instead of MSAA and no AO. No bloom and no tone curve: every
+// material stays below 1, so the greys and the persona colours of the agent dots render as set.
 import { useEffect } from 'react';
 import { useThree } from '@react-three/fiber';
 import { PerformanceMonitor } from '@react-three/drei';
-import { Bloom, EffectComposer, N8AO, SMAA, ToneMapping, Vignette } from '@react-three/postprocessing';
-import { ToneMappingMode } from 'postprocessing';
+import { EffectComposer, N8AO, SMAA, Vignette } from '@react-three/postprocessing';
 import { MIN_DPR, QUALITY, type Quality } from './style';
-
-/** Linear luminance above which a pixel blooms. */
-export const BLOOM_THRESHOLD = 1;
 
 export function Effects({ quality }: { quality: Quality }) {
   const settings = QUALITY[quality];
   // Keyed by quality: the composer rebuilds its passes and buffers when the tier changes.
   return settings.ambientOcclusion ? (
     <EffectComposer key="high" multisampling={settings.multisampling} stencilBuffer={false}>
-      <N8AO aoRadius={7} distanceFalloff={1.4} intensity={2.4} quality="medium" halfRes color="#06101f" />
-      <Bloom mipmapBlur luminanceThreshold={BLOOM_THRESHOLD} luminanceSmoothing={0.2} intensity={0.9}
-        radius={0.72} levels={settings.bloomLevels} />
-      <ToneMapping mode={ToneMappingMode.ACES_FILMIC} />
-      <Vignette offset={0.32} darkness={0.5} />
+      <N8AO aoRadius={6} distanceFalloff={1.2} intensity={1.6} quality="medium" halfRes color="#000000" />
+      <Vignette offset={0.35} darkness={0.35} />
     </EffectComposer>
   ) : (
     <EffectComposer key="fast" multisampling={settings.multisampling} stencilBuffer={false}>
       <SMAA />
-      <Bloom mipmapBlur luminanceThreshold={BLOOM_THRESHOLD} luminanceSmoothing={0.2} intensity={0.75}
-        radius={0.65} levels={settings.bloomLevels} />
-      <ToneMapping mode={ToneMappingMode.ACES_FILMIC} />
-      <Vignette offset={0.32} darkness={0.5} />
+      <Vignette offset={0.35} darkness={0.35} />
     </EffectComposer>
   );
 }

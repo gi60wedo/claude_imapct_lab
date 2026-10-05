@@ -11,7 +11,8 @@ export const SIDE_DISTANCE_M = 420;
 
 /**
  * Framing in metres around a focus point (x east, y up, z = −north).
- * perspective: oblique from the south-west. side: a near-horizontal elevation from street-level
+ * perspective: the whole Altstadt (about 1.6 × 1.2 km) from the south-west, about 50° above the
+ * horizon, so the street network and the agents between the buildings stay visible. side: a near-horizontal elevation from street-level
  * height, looking along `forward` (world x, z; default due north) across the site.
  * top: straight down through a narrow lens, close to orthographic. The tiny z offset keeps
  * OrbitControls off its pole singularity.
@@ -29,6 +30,6 @@ export function cameraPreset(mode: CameraMode, [x, y, z]: Vec3, forward: readonl
     case 'top':
       return { position: [x, y + 2300, z + 0.5], target: [x, y, z], fov: 18 };
     default:
-      return { position: [x - 250, y + 260, z + 330], target: [x, y, z], fov: 42 };
+      return { position: [x - 520, y + 1100, z + 760], target: [x, y, z], fov: 42 };
   }
 }

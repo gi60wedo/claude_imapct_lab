@@ -57,8 +57,9 @@ const BAND_M = 2;
 const DEPTH_M = 80;
 const TICK_M = 26;
 
-const SITE = new Color('#a5f3fc'), PROFILE = new Color('#22d3ee');
-const BAND = new Color('#0e7490'), FLOOR = new Color('#040a16');
+// Greys only: the cut reads as a light profile line over a dark curtain, the site's stretch white.
+const SITE = new Color('#ffffff'), PROFILE = new Color('#a1a1aa');
+const BAND = new Color('#3f3f46'), FLOOR = new Color('#0b0b0c');
 
 /** Terrain profile curtain along the cut, the site's stretch highlighted, with edge ticks. */
 export function SectionProfile({ city, section, lift }: { city: CityModel; section: Section; lift: number }) {

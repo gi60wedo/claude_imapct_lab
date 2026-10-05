@@ -2,7 +2,46 @@ import { describe, expect, it } from 'vitest';
 import { samplePacked, trailLength } from './geometry';
 import { eaveHeight, parseRoofs } from './roofs';
 import { footways, type WalkGraph } from './streets';
-import { easeInOutCubic, QUALITY, SUN, sunDirection, SURFACES, surfaceClass } from './style';
+import { Color } from 'three';
+import { easeInOutCubic, MAP, QUALITY, ROAD_ORDER, roadClass, ROADS, SUN, sunDirection, SURFACES, surfaceClass } from './style';
+
+describe('monochrome map', () => {
+  /** Largest gap between two sRGB channels, 0–255: 0 is a pure grey; a few steps is a faint cool tint. */
+  const tint = (hex: string) => {
+    const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
+    return Math.max(r, g, b) - Math.min(r, g, b);
+  };
+
+  it('keeps the city, light, roads and surface overlay grey', () => {
+    for (const hex of [MAP.background, MAP.ground, MAP.contour, MAP.building, MAP.edge, MAP.site, MAP.siteSelected]) {
+      expect(tint(hex)).toBeLessThanOrEqual(8);
+    }
+    for (const preset of Object.values(SUN)) for (const hex of [preset.color, preset.sky, preset.ground]) expect(tint(hex)).toBe(0);
+    for (const road of Object.values(ROADS)) expect(tint(road.color)).toBeLessThanOrEqual(8);
+    for (const surface of SURFACES) expect(tint(surface.color)).toBeLessThanOrEqual(8);
+  });
+
+  it('draws sett lighter and dashed, asphalt darker', () => {
+    const lightness = (id: string) => new Color(SURFACES.find((s) => s.id === id)!.color).getHSL({ h: 0, s: 0, l: 0 }).l;
+    expect(SURFACES.find((s) => s.id === 'cobble')!.dashed).toBe(true);
+    expect(lightness('cobble')).toBeGreaterThan(lightness('asphalt'));
+  });
+
+  it('maps OSM highway tags to road classes, wider for major roads', () => {
+    expect(roadClass('secondary')).toBe('major');
+    expect(roadClass('tertiary_link')).toBe('major');
+    expect(roadClass('residential')).toBe('minor');
+    expect(roadClass('pedestrian')).toBe('pedestrian');
+    expect(roadClass('footway')).toBe('footway');
+    expect(roadClass('steps')).toBe('footway');
+    expect(roadClass('elevator')).toBeNull();
+    expect(roadClass(undefined, true)).toBe('minor');
+    expect(roadClass(null, false)).toBe('footway');
+    expect(ROADS.major.width).toBeGreaterThan(ROADS.minor.width);
+    expect(ROADS.minor.width).toBeGreaterThan(ROADS.footway.width);
+    expect(ROAD_ORDER[ROAD_ORDER.length - 1]).toBe('major');
+  });
+});
 
 describe('camera easing', () => {
   it('eases in and out symmetrically and clamps to [0, 1]', () => {

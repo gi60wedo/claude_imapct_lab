@@ -1,22 +1,26 @@
-// Three.js view of the Altstadt twin: a stylised massing model of the LoD2 buildings on a
-// contoured DGM1 terrain, the walking network by surface, the candidate sites, and the selected
-// site's simulation (trips, heat, bottlenecks, stalls).
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type JSX, type RefObject } from 'react';
+// Three.js view of the Altstadt twin as a dark monochrome map: the LoD2 buildings as flat grey
+// massing on a near-black DGM1 terrain, grey streets by road class, the candidate sites in white
+// and grey, and the selected site's simulation (agent dots, heat, bottlenecks, stalls). The agent
+// dots carry the only colour.
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type JSX, type RefObject } from 'react';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { OrbitControls } from '@react-three/drei';
-import { BufferGeometry, Color, Float32BufferAttribute, Fog, PCFShadowMap, type PerspectiveCamera, Vector3 } from 'three';
+import {
+  BufferGeometry, Color, DoubleSide, Float32BufferAttribute, Fog, type LineSegments, PCFShadowMap, type PerspectiveCamera,
+  Uint32BufferAttribute, Vector3,
+} from 'three';
 import type { Candidate, SimulationResult, TimeSlice } from '../../contracts';
 import { cameraPreset, SIDE_LIFT, type CameraMode, type Vec3 } from './camera';
 import { getCity, upgradeRoofs, type CityModel } from './city';
 import { AdaptiveResolution, Effects } from './effects';
-import { BEAM_M, Bottlenecks, Candidates, ground, Heat, siteAnchor, sliceOf, Stalls, Trips } from './layers';
+import { Bottlenecks, Candidates, ground, Heat, LABEL_LIFT_M, siteAnchor, sliceOf, Stalls, Trips } from './layers';
 import { Lights } from './lighting';
 import { sectionFor, SectionClip, SectionProfile } from './section';
-import { getStreets, STREET_LIFT_M, type StreetOverlay } from './streets';
-import { CAMERA_TWEEN_S, easeInOutCubic, SURFACES, type Quality } from './style';
+import { getStreets, ROAD_LIFT_M, STREET_LIFT_M, type LineSet, type RoadMesh, type Streets } from './streets';
+import { CAMERA_TWEEN_S, easeInOutCubic, MAP, SURFACES, type AgentColors, type Quality } from './style';
 
 export type { CameraMode } from './camera';
-export type { Quality } from './style';
+export type { AgentColors, Quality } from './style';
 
 export interface CityThreeProps {
   cameraMode: CameraMode; heatmap: boolean;
@@ -32,11 +36,13 @@ export interface CityThreeProps {
   slice?: TimeSlice;
   /** Render tier: 'high' adds MSAA, ambient occlusion and larger shadow maps. Default 'high'. */
   quality?: Quality;
-  /** Footway overlay coloured by surface. Default true. */
+  /** Footway overlay in greys by surface (sett dashed). The grey road network is always drawn. Default false. */
   streets?: boolean;
+  /** Agent dots in persona colours or all white. Default 'persona'. */
+  agentColors?: AgentColors;
 }
 
-const BACKGROUND = '#050b18';
+const BACKGROUND = MAP.background;
 const DEFAULT_SLICE: TimeSlice = '11:30_PEAK';
 const NO_HEAT: [number, number, number][] = [];
 
@@ -46,7 +52,7 @@ interface Controls {
   removeEventListener(type: 'start', listener: () => void): void;
 }
 
-/** Focus point for the camera and the building glow: the selected site's centroid on terrain. */
+/** Focus point for the camera and the light: the selected site's centroid on terrain. */
 function focusPoint(city: CityModel, candidate: Candidate | undefined, lift: number): Vec3 {
   if (!candidate || candidate.polygon.length < 3) return [0, ground(city, city.frame.origin, lift), 0];
   return siteAnchor(city, candidate, lift);
@@ -116,32 +122,45 @@ function CameraRig({ mode, focus, forward }: { mode: CameraMode; focus: Vec3; fo
   return null;
 }
 
-/** Eases the building glow toward the selected site. */
-function FocusGlow({ city, focus, active }: { city: CityModel; focus: Vec3; active: boolean }) {
-  useFrame((_, delta) => {
-    const k = 1 - Math.exp(-Math.min(delta, 0.1) * 3);
-    const uniforms = city.uniforms;
-    uniforms.uFocus.value.lerp({ x: focus[0], y: focus[2] }, k);
-    uniforms.uFocusStrength.value += ((active ? 1 : 0) - uniforms.uFocusStrength.value) * k;
-  });
-  return null;
-}
-
-/** Footways draped on the terrain; the y scale applies the same lift as the terrain mesh. */
-function StreetLines({ overlay, lift }: { overlay: StreetOverlay; lift: number }) {
+/** Surface lines draped on the terrain; the y scale applies the same lift as the terrain mesh. */
+function SurfaceLines({ set, dashed, lift }: { set: LineSet; dashed: boolean; lift: number }) {
+  const ref = useRef<LineSegments>(null);
   const geometry = useMemo(() => {
     const g = new BufferGeometry();
-    g.setAttribute('position', new Float32BufferAttribute(overlay.positions, 3));
-    g.setAttribute('color', new Float32BufferAttribute(overlay.colors, 3));
+    g.setAttribute('position', new Float32BufferAttribute(set.positions, 3));
+    g.setAttribute('color', new Float32BufferAttribute(set.colors, 3));
     g.computeBoundingSphere();
     return g;
-  }, [overlay]);
+  }, [set]);
+  useLayoutEffect(() => () => geometry.dispose(), [geometry]);
+  // Dash distances accumulate along the segments in metres.
+  useLayoutEffect(() => { if (dashed) ref.current?.computeLineDistances(); }, [dashed, geometry]);
+  if (set.positions.length === 0) return null;
+  return (
+    <lineSegments ref={ref} geometry={geometry} scale-y={lift} position-y={STREET_LIFT_M} renderOrder={3}
+      raycast={() => null} frustumCulled={false}>
+      {dashed ? <lineDashedMaterial vertexColors transparent opacity={0.9} dashSize={2.2} gapSize={1.8} depthWrite={false} />
+        : <lineBasicMaterial vertexColors transparent opacity={0.8} depthWrite={false} />}
+    </lineSegments>
+  );
+}
+
+/** Grey road ribbons on the terrain, painted in index order after the terrain and buildings. */
+function Roads({ roads, lift }: { roads: RoadMesh; lift: number }) {
+  const geometry = useMemo(() => {
+    const g = new BufferGeometry();
+    g.setAttribute('position', new Float32BufferAttribute(roads.positions, 3));
+    g.setAttribute('color', new Float32BufferAttribute(roads.colors, 3));
+    g.setIndex(new Uint32BufferAttribute(roads.index, 1));
+    g.computeBoundingSphere();
+    return g;
+  }, [roads]);
   useLayoutEffect(() => () => geometry.dispose(), [geometry]);
   return (
-    <lineSegments geometry={geometry} scale-y={lift} position-y={STREET_LIFT_M} renderOrder={2}
-      raycast={() => null} frustumCulled={false}>
-      <lineBasicMaterial vertexColors transparent opacity={0.85} depthWrite={false} />
-    </lineSegments>
+    <mesh geometry={geometry} scale-y={lift} position-y={ROAD_LIFT_M} renderOrder={1} raycast={() => null}
+      frustumCulled={false}>
+      <meshBasicMaterial vertexColors side={DoubleSide} depthWrite={false} />
+    </mesh>
   );
 }
 
@@ -176,9 +195,9 @@ function LabelAnchor({ label, anchor }: { label: RefObject<HTMLDivElement | null
   return null;
 }
 
-function Scene({ city, props, label, overlay, roofs }: {
+function Scene({ city, props, label, streets, roofs, onAgentCount }: {
   city: CityModel; props: CityThreeProps; label: RefObject<HTMLDivElement | null>;
-  overlay: StreetOverlay | null; roofs: number;
+  streets: Streets | null; roofs: number; onAgentCount: (count: number) => void;
 }) {
   const { cameraMode, heatmap, selectedId, candidates, result, timeSec, onSelect } = props;
   const quality = props.quality ?? 'high';
@@ -187,7 +206,7 @@ function Scene({ city, props, label, overlay, roofs }: {
   const selected = candidates.find((candidate) => candidate.id === selectedId);
   const focus = useMemo(() => focusPoint(city, selected, lift), [city, selected, lift]);
   const section = useMemo(() => sectionFor(city, selected), [city, selected]);
-  const anchor: Vec3 | null = selected ? [focus[0], focus[1] + BEAM_M + 6, focus[2]] : null;
+  const anchor: Vec3 | null = selected ? [focus[0], focus[1] + LABEL_LIFT_M, focus[2]] : null;
   const activeSlice = props.slice ?? DEFAULT_SLICE;
   const slice = result ? sliceOf(result, activeSlice) : null;
   const stallSite = result ? candidates.find((candidate) => candidate.id === result.candidateId) : undefined;
@@ -201,17 +220,21 @@ function Scene({ city, props, label, overlay, roofs }: {
       <Lights focus={focus} slice={activeSlice} quality={quality} revision={shadowRevision} />
       <primitive object={city.terrain} />
       <primitive object={city.buildings} />
-      {overlay && props.streets !== false && <StreetLines overlay={overlay} lift={lift} />}
+      {streets && <Roads roads={streets.roads} lift={lift} />}
+      {streets && props.streets && <SurfaceLines set={streets.overlay.solid} dashed={false} lift={lift} />}
+      {streets && props.streets && <SurfaceLines set={streets.overlay.dashed} dashed lift={lift} />}
       {side && <SectionClip section={section} />}
       {side && <SectionProfile city={city} section={section} lift={lift} />}
       <Candidates city={city} candidates={candidates} selectedId={selectedId} lift={lift} onSelect={onSelect} />
-      {result && result.trips.length > 0 && <Trips city={city} trips={result.trips} timeSec={timeSec} lift={lift} />}
+      {result && result.trips.length > 0 && (
+        <Trips city={city} trips={result.trips} timeSec={timeSec} lift={lift} colors={props.agentColors ?? 'persona'}
+          onCount={onAgentCount} />
+      )}
       <Heat city={city} heat={slice?.heat ?? NO_HEAT} lift={lift} visible={heatmap} />
       {slice && <Bottlenecks key={activeSlice} city={city} bottlenecks={slice.bottlenecks} lift={lift} />}
       {stallSite && result && result.stallExposure.length > 0 && (
         <Stalls city={city} candidate={stallSite} exposure={result.stallExposure} lift={lift} />
       )}
-      <FocusGlow city={city} focus={focus} active={Boolean(selected)} />
       <LabelAnchor label={label} anchor={anchor} />
       {/* The side elevation looks horizontally, so it may orbit down to the horizon. */}
       <OrbitControls makeDefault enableDamping dampingFactor={0.07} rotateSpeed={0.6} zoomSpeed={0.8}
@@ -223,19 +246,20 @@ function Scene({ city, props, label, overlay, roofs }: {
   );
 }
 
-/** Corner legend for the street overlay: only the surface classes present in the data. */
-function StreetLegend({ overlay }: { overlay: StreetOverlay }) {
+const GLASS = 'rounded-md border border-white/10 bg-black/55 backdrop-blur-md';
+
+/** Legend for the street overlay: only the surface classes present in the data. */
+function StreetLegend({ overlay }: { overlay: Streets['overlay'] }) {
   return (
-    <div data-testid="street-legend"
-      className="rounded border border-cyan-300/30 bg-slate-950/75 px-3 py-2 font-mono text-xs text-slate-300">
-      <div className="mb-1 uppercase tracking-wider text-cyan-200">Footway surface</div>
+    <div data-testid="street-legend" className={`${GLASS} px-2.5 py-1.5 font-mono text-[11px] text-zinc-300`}>
+      <div className="mb-0.5 uppercase tracking-wider text-zinc-400">Footway surface</div>
       {SURFACES.filter((s) => overlay.present.includes(s.id)).map((s) => (
         <div key={s.id} className="flex items-center gap-2" data-surface={s.id}>
-          <span className="inline-block h-0.5 w-5 rounded" style={{ background: s.color, boxShadow: `0 0 6px ${s.color}` }} />
+          <span className="inline-block w-5 border-t-2" style={{ borderColor: s.color, borderStyle: s.dashed ? 'dashed' : 'solid' }} />
           {s.label}
         </div>
       ))}
-      <div className="mt-1 text-slate-500">source: <span data-bind="streets.source">{overlay.source}</span></div>
+      <div className="mt-0.5 text-zinc-500">source: <span data-bind="streets.source">{overlay.source}</span></div>
     </div>
   );
 }
@@ -243,7 +267,7 @@ function StreetLegend({ overlay }: { overlay: StreetOverlay }) {
 export default function CityThree(props: CityThreeProps): JSX.Element {
   const [city, setCity] = useState<CityModel | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [overlay, setOverlay] = useState<StreetOverlay | null>(null);
+  const [streetData, setStreetData] = useState<Streets | null>(null);
   const [roofs, setRoofs] = useState(0);
   useEffect(() => {
     let live = true;
@@ -257,7 +281,7 @@ export default function CityThree(props: CityThreeProps): JSX.Element {
   useEffect(() => {
     if (!city) return;
     let live = true;
-    getStreets(city).then((streets) => { if (live) setOverlay(streets); });
+    getStreets(city).then((streets) => { if (live) setStreetData(streets); });
     upgradeRoofs(city).then((count) => { if (live) setRoofs(count); });
     return () => { live = false; };
   }, [city]);
@@ -265,11 +289,18 @@ export default function CityThree(props: CityThreeProps): JSX.Element {
   const label = useRef<HTMLDivElement>(null);
   const selected = props.candidates.find((candidate) => candidate.id === props.selectedId);
   const quality = props.quality ?? 'high';
-  const streets = props.streets !== false;
+  const streets = props.streets === true;
+  const overlay = streetData?.overlay ?? null;
+  // The dots are counted every frame; the count goes straight to the DOM, not through React state.
+  const wrapper = useRef<HTMLDivElement>(null);
+  const onAgentCount = useCallback((count: number) => {
+    if (wrapper.current) wrapper.current.dataset.agentCount = String(count);
+  }, []);
   return (
-    <div data-testid="city-three" data-ready={city ? 'true' : 'false'}
+    <div ref={wrapper} data-testid="city-three" data-ready={city ? 'true' : 'false'}
       data-building-count={city ? city.buildingCount : 0} data-roof-count={roofs} data-quality={quality}
-      data-streets={streets && overlay ? 'true' : 'false'}
+      data-streets={streets && overlay ? 'true' : 'false'} data-roads={streetData ? 'true' : 'false'}
+      data-agent-count={0} data-agent-colors={props.agentColors ?? 'persona'}
       className="relative h-full w-full overflow-hidden" style={{ background: BACKGROUND }}>
       {city && (
         // MSAA and SMAA run in the composer, so the default framebuffer needs no antialiasing.
@@ -277,24 +308,24 @@ export default function CityThree(props: CityThreeProps): JSX.Element {
           camera={{ position: initial.position, fov: initial.fov, near: 1, far: 9000 }}
           gl={{ antialias: false, stencil: false, powerPreference: 'high-performance' }}
           onCreated={({ scene }) => { scene.background = new Color(BACKGROUND); }}>
-          <Scene city={city} props={props} label={label} overlay={overlay} roofs={roofs} />
+          <Scene city={city} props={props} label={label} streets={streetData} roofs={roofs} onAgentCount={onAgentCount} />
         </Canvas>
       )}
       <div ref={label} className="pointer-events-none absolute left-0 top-0" style={{ visibility: 'hidden' }}
         data-testid="site-label">
         {selected && (
           <span data-bind="candidate.name"
-            className="whitespace-nowrap rounded border border-cyan-300/40 bg-slate-950/80 px-2 py-0.5 font-mono text-xs text-cyan-200 shadow-[0_0_12px_rgba(34,211,238,0.35)]">
+            className="whitespace-nowrap rounded border border-white/70 bg-black/70 px-2 py-0.5 font-mono text-xs text-white">
             {selected.name}
           </span>
         )}
       </div>
       {city && (
-        <div className="pointer-events-none absolute right-4 top-20 flex flex-col items-end gap-2">
+        // Top centre, under the camera switch of the dashboard overlay.
+        <div className="pointer-events-none absolute left-1/2 top-28 flex -translate-x-1/2 flex-col items-center gap-2">
           {streets && overlay && <StreetLegend overlay={overlay} />}
           {props.cameraMode === 'side' && (
-            <div data-testid="side-legend"
-              className="rounded border border-cyan-300/30 bg-slate-950/75 px-3 py-1.5 font-mono text-xs text-cyan-200">
+            <div data-testid="side-legend" className={`${GLASS} px-2.5 py-1 font-mono text-[11px] text-zinc-300`}>
               Section through {selected ? <span data-bind="candidate.name">{selected.name}</span> : 'the city centre'}
               {' '}· vertical ×<span data-bind="cityThree.SIDE_LIFT">{SIDE_LIFT}</span> on terrain and building bases
             </div>
@@ -302,7 +333,7 @@ export default function CityThree(props: CityThreeProps): JSX.Element {
         </div>
       )}
       {!city && (
-        <div className="absolute inset-0 grid place-items-center font-mono text-sm text-cyan-300/70">
+        <div className="absolute inset-0 grid place-items-center font-mono text-sm text-zinc-400">
           {error ? <span data-testid="city-three-error" className="text-rose-400">3D city failed to load: {error}</span>
             : <span className="animate-pulse">Loading 3D city…</span>}
         </div>

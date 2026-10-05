@@ -82,6 +82,33 @@ test('three dashboard: camera modes, heatmap, candidate switch, rule zero', asyn
   expect(shotA.equals(shotB), 'trip dots move between frames while playing').toBe(false);
   await page.screenshot({ path: `${SHOTS}/three-delivery.png` });
 
+  // One dot per agent on its way: the city reports how many it draws. The fixture trips (counted
+  // from 05:30) fill up over the first sim minutes, so poll while the clock runs.
+  await expect.poll(async () => Number(await city.getAttribute('data-agent-count')), { timeout: 30_000 })
+    .toBeGreaterThanOrEqual(50);
+  await page.screenshot({ path: `${SHOTS}/three-agents.png` });
+
+  // Agents: Colour / White.
+  const colours = page.getByTestId('agent-colors');
+  await expect(colours).toHaveText('Agents: Colour');
+  await colours.click();
+  await expect(colours).toHaveText('Agents: White');
+  await expect(city).toHaveAttribute('data-agent-colors', 'white');
+  await page.screenshot({ path: `${SHOTS}/three-agents-white.png` });
+  await colours.click();
+  await expect(city).toHaveAttribute('data-agent-colors', 'persona');
+
+  // The grey road network is always drawn; the surface overlay sits behind the Streets toggle.
+  await expect(city).toHaveAttribute('data-roads', 'true', { timeout: 30_000 });
+  await expect(city).toHaveAttribute('data-streets', 'false');
+  await expect(page.getByTestId('street-legend')).toHaveCount(0);
+  await page.getByTestId('streets-toggle').click();
+  await expect(city).toHaveAttribute('data-streets', 'true');
+  await expect(page.getByTestId('street-legend')).toBeVisible();
+  await page.screenshot({ path: `${SHOTS}/three-streets.png` });
+  await page.getByTestId('streets-toggle').click();
+  await expect(city).toHaveAttribute('data-streets', 'false');
+
   // Pause stops the clock.
   await play.click();
   await expect(play).toHaveAttribute('aria-pressed', 'false');
@@ -98,6 +125,16 @@ test('three dashboard: camera modes, heatmap, candidate switch, rule zero', asyn
   await expect.poll(async () => Number(await bar.getAttribute('data-runs'))).toBeGreaterThan(runs);
   await expect(bar).toHaveAttribute('data-blend', '1');
   await page.screenshot({ path: `${SHOTS}/three-rainy.png` });
+
+  // The site details collapse to a slim rail and come back.
+  const side = page.getByTestId('side-panel');
+  await page.getByTestId('side-collapse').click();
+  await expect(side).toHaveAttribute('data-open', 'false');
+  await expect(page.getByTestId('score-card')).toBeHidden();
+  await page.screenshot({ path: `${SHOTS}/three-rail.png` });
+  await page.getByTestId('side-collapse').click();
+  await expect(side).toHaveAttribute('data-open', 'true');
+  await expect(page.getByTestId('score-card')).toBeVisible();
 
   expect(await unboundDigits(page), 'every digit on screen must sit inside [data-bind]').toEqual([]);
   expect(errors, 'no console errors').toEqual([]);

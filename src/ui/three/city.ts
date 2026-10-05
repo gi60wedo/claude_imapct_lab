@@ -1,7 +1,8 @@
 // Loads the terrain and LoD2 buildings once and turns them into a handful of merged three.js
 // objects in the local metric frame (x east, y up = elevation − baseElevation, z = −north).
-// The look is a stylised massing model: matte slate terrain with elevation contours decoded from
-// the DGM1 raster in the shader, and light matte buildings with crisp, subtle edges.
+// The look is a dark monochrome map: matte near-black terrain with faint grey 5 m contours decoded
+// from the DGM1 raster in the shader, flat dark-grey buildings with lighter roof tops, and thin
+// light-grey edges at low opacity.
 import {
   BackSide, BufferGeometry, ClampToEdgeWrapping, Color, DataTexture, DataUtils, DoubleSide, EdgesGeometry,
   Float32BufferAttribute, Group, HalfFloatType, LinearFilter, LineBasicMaterial, LineSegments, Mesh,
@@ -14,6 +15,7 @@ import {
   type Bounds, type ElevationDecoder, type ElevationRaster, type LngLat, type LocalFrame,
 } from './geometry';
 import { eaveHeight, loadRoofs, type RoofMap } from './roofs';
+import { MAP } from './style';
 
 interface TerrainMetadata {
   bounds: Bounds; baseElevation: number; elevationDecoder?: ElevationDecoder;
@@ -23,12 +25,11 @@ interface BuildingRecord { id: string; polygon: [number, number, number][][]; h:
 interface BuildingsAsset { baseElevation: number; buildings: BuildingRecord[] }
 
 /**
- * Uniforms shared by every building, edge and shadow-depth material: the glow around the selected
- * site, and uLift, the vertical exaggeration applied to building bases. The terrain mesh takes the
- * same factor as its y scale, so buildings stay seated on the exaggerated ground.
+ * Uniforms shared by every building, edge and shadow-depth material: uLift, the vertical
+ * exaggeration applied to building bases. The terrain mesh takes the same factor as its y scale,
+ * so buildings stay seated on the exaggerated ground.
  */
 export interface CityUniforms {
-  uFocus: { value: Vector2 }; uFocusRadius: { value: number }; uFocusStrength: { value: number };
   uLift: { value: number };
 }
 
@@ -49,9 +50,8 @@ export interface CityModel {
 
 const TILE_M = 600;
 const TERRAIN_SEGMENTS = 256;
-/** Contour intervals in metres of absolute elevation. */
-const CONTOUR_MINOR_M = 1;
-const CONTOUR_MAJOR_M = 5;
+/** Contour interval in metres of absolute elevation. */
+const CONTOUR_M = 5;
 
 export function assetUrl(path: string) {
   const relative = path.replace(/^\//, '');
@@ -121,9 +121,9 @@ function terrainMaterial(raster: ElevationRaster, baseElevation: number, rect: V
     uHeightRange: { value: range },
     /** West x, north n, width and depth of the raster in metres. */
     uTerrainRect: { value: rect },
-    uContourColor: { value: new Color('#5cc8f0') },
+    uContourColor: { value: new Color(MAP.contour) },
   };
-  const material = new MeshStandardMaterial({ color: new Color('#1b2a3f'), roughness: 0.97, metalness: 0 });
+  const material = new MeshStandardMaterial({ color: new Color(MAP.ground), roughness: 1, metalness: 0 });
   material.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, uniforms);
     shader.vertexShader = shader.vertexShader
@@ -147,11 +147,10 @@ float contourLine(float h, float interval, float width) {
 vec2 terrainUv = (clamp(vTerrain * uHeightSize, vec2(0.0), uHeightSize - 1.0) + 0.5) / uHeightSize;
 float terrainRel = texture2D(uHeight, terrainUv).r;
 float terrainT = clamp((terrainRel - uHeightRange.x) / max(uHeightRange.y - uHeightRange.x, 1e-3), 0.0, 1.0);
-diffuseColor.rgb *= mix(0.72, 1.35, terrainT);
-float terrainLines = max(contourLine(terrainRel + uBaseElevation, ${CONTOUR_MINOR_M.toFixed(1)}, 1.0) * 0.35,
-  contourLine(terrainRel + uBaseElevation, ${CONTOUR_MAJOR_M.toFixed(1)}, 1.5));`)
+diffuseColor.rgb *= mix(0.85, 1.15, terrainT);
+float terrainLines = contourLine(terrainRel + uBaseElevation, ${CONTOUR_M.toFixed(1)}, 1.0);`)
       .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
-totalEmissiveRadiance += uContourColor * terrainLines * 0.22;`);
+totalEmissiveRadiance += uContourColor * terrainLines * 0.35;`);
   };
   return material;
 }
@@ -185,56 +184,30 @@ function buildTerrain(raster: ElevationRaster, frame: LocalFrame, baseElevation:
 function injectLift(shader: WebGLProgramParametersWithUniforms, uniforms: CityUniforms, extra = '') {
   Object.assign(shader.uniforms, uniforms);
   shader.vertexShader = shader.vertexShader
-    .replace('#include <common>', '#include <common>\nattribute float aBase;\nuniform float uLift;\nvarying vec3 vFocusWorld;\nvarying float vBase;')
+    .replace('#include <common>', '#include <common>\nattribute float aBase;\nuniform float uLift;\nvarying float vAbove;\nvarying float vUp;')
     .replace('#include <begin_vertex>',
-      `#include <begin_vertex>\nvBase = aBase;\ntransformed.y += (uLift - 1.0) * aBase;${extra}`);
-}
-
-function injectFocus(shader: WebGLProgramParametersWithUniforms, uniforms: CityUniforms, fragment: string) {
-  // The glow and the height gradient read true heights, so the lift is taken back out of vFocusWorld.
-  injectLift(shader, uniforms,
-    '\nvFocusWorld = (modelMatrix * vec4(transformed, 1.0)).xyz;\nvFocusWorld.y -= (uLift - 1.0) * aBase;');
-  shader.fragmentShader = shader.fragmentShader
-    .replace('#include <common>', `#include <common>
-varying vec3 vFocusWorld;
-varying float vBase;
-uniform vec2 uFocus; uniform float uFocusRadius; uniform float uFocusStrength;
-float focusAmount() {
-  float d = distance(vFocusWorld.xz, uFocus);
-  return uFocusStrength * (1.0 - smoothstep(uFocusRadius * 0.35, uFocusRadius, d));
-}`)
-    .replace(fragment.split('\n')[0], fragment);
+      `#include <begin_vertex>\nvAbove = max(position.y - aBase, 0.0);\ntransformed.y += (uLift - 1.0) * aBase;${extra}`);
 }
 
 function buildingMaterials(uniforms: CityUniforms) {
   // Double-sided so a section cut (side view) shows the far walls of sliced buildings instead of
   // hollow shells; shadows keep the single-sided back-face casting.
   const massing = new MeshStandardMaterial({
-    color: new Color('#c9d3e0'), roughness: 0.9, metalness: 0, side: DoubleSide, shadowSide: BackSide,
+    color: new Color(MAP.building), roughness: 1, metalness: 0, side: DoubleSide, shadowSide: BackSide,
   });
-  // Contact shading darkens the first metres above the base, a gentle gradient lightens taller
-  // masses, and the selected site's block takes a cyan tint with a faint glow.
-  massing.onBeforeCompile = (shader) => injectFocus(shader, uniforms, `#include <emissivemap_fragment>
-{
-  float f = focusAmount();
-  float above = max(vFocusWorld.y - vBase, 0.0);
-  float contact = smoothstep(0.0, 8.0, above);
-  float rise = smoothstep(4.0, 45.0, above);
-  diffuseColor.rgb *= (0.58 + 0.42 * contact) * (0.9 + 0.18 * rise);
-  diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.32, 0.8, 0.95), 0.6 * f);
-  totalEmissiveRadiance += vec3(0.01, 0.16, 0.26) * f * (0.4 + 0.6 * rise);
-}`);
-  // Edges are a dark hairline on the calm city and an HDR cyan (above the bloom threshold) on
-  // the selected block, so only the focus glows.
+  // Flat dark massing: a soft contact shade over the first metres above the base, and roof tops
+  // (faces pointing up) a touch lighter than the walls.
+  massing.onBeforeCompile = (shader) => {
+    injectLift(shader, uniforms, '\nvUp = normalize(mat3(modelMatrix) * objectNormal).y;');
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', '#include <common>\nvarying float vAbove;\nvarying float vUp;')
+      .replace('#include <color_fragment>', `#include <color_fragment>
+diffuseColor.rgb *= (0.78 + 0.22 * smoothstep(0.0, 6.0, vAbove)) * (1.0 + 0.12 * smoothstep(0.35, 0.8, abs(vUp)));`);
+  };
   const edges = new LineBasicMaterial({
-    color: new Color('#0c1828'), transparent: true, opacity: 0.32, depthWrite: false,
+    color: new Color(MAP.edge), transparent: true, opacity: MAP.edgeOpacity, depthWrite: false,
   });
-  edges.onBeforeCompile = (shader) => injectFocus(shader, uniforms, `#include <color_fragment>
-{
-  float f = focusAmount();
-  diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.35, 2.2, 2.8), f);
-  diffuseColor.a = mix(diffuseColor.a, 0.95, f);
-}`);
+  edges.onBeforeCompile = (shader) => injectLift(shader, uniforms);
   // Same as the shadow map's default depth material, plus the lift.
   const depth = new MeshDepthMaterial();
   depth.onBeforeCompile = (shader) => injectLift(shader, uniforms);
@@ -336,10 +309,7 @@ async function loadCity(): Promise<CityModel> {
   const frame = createLocalFrame([(west + east) / 2, (south + north) / 2]);
   const decoder = terrain.elevationDecoder ?? TERRARIUM;
   const raster = await loadRaster(terrain.elevation?.url ?? '/data/terrain/elevation.png', terrain.bounds, decoder);
-  const uniforms: CityUniforms = {
-    uFocus: { value: new Vector2(0, 0) }, uFocusRadius: { value: 140 }, uFocusStrength: { value: 0 },
-    uLift: { value: 1 },
-  };
+  const uniforms: CityUniforms = { uLift: { value: 1 } };
   const ground = buildTerrain(raster, frame, terrain.baseElevation);
   const { meshes, built } = await buildBuildings(asset, frame, uniforms, null);
   const group = new Group();

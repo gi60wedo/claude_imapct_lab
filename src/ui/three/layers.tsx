@@ -1,23 +1,24 @@
-// Per-frame scene layers on top of the static city: candidate plates, trips, heat, bottlenecks
-// and stalls. Every size, colour intensity and count derives from the props; nothing is typed in.
-// `lift` is the vertical exaggeration shared with the terrain and building bases.
+// Per-frame scene layers on top of the static city: candidate outlines, agent dots, heat,
+// bottlenecks and stalls. Everything but the agent dots is white or grey. Every size, intensity
+// and count derives from the props; nothing is typed in. `lift` is the vertical exaggeration
+// shared with the terrain and building bases.
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { useFrame, type ThreeEvent } from '@react-three/fiber';
+import { useFrame, useThree, type ThreeEvent } from '@react-three/fiber';
 import {
-  AdditiveBlending, BoxGeometry, BufferGeometry, CanvasTexture, Color, CylinderGeometry,
-  DoubleSide, Float32BufferAttribute, type Group, type InstancedMesh, type Mesh, MeshBasicMaterial,
-  Object3D, PlaneGeometry, RingGeometry, ShapeGeometry, SphereGeometry,
+  AdditiveBlending, BoxGeometry, BufferGeometry, CanvasTexture, Color, CylinderGeometry, DoubleSide, DynamicDrawUsage,
+  Float32BufferAttribute, GreaterDepth, type Group, InstancedBufferAttribute, InstancedBufferGeometry, type InstancedMesh,
+  type Mesh, MeshBasicMaterial, Object3D, PlaneGeometry, RingGeometry, ShaderMaterial, ShapeGeometry, SphereGeometry, Vector2,
 } from 'three';
-import type { Bottleneck, Candidate, PersonaId, SimulationResult, TimeSlice } from '../../contracts';
+import { Line2 } from 'three/addons/lines/Line2.js';
+import { LineGeometry } from 'three/addons/lines/LineGeometry.js';
+import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
+import type { Bottleneck, Candidate, SimulationResult, TimeSlice } from '../../contracts';
 import type { CityModel } from './city';
 import {
-  footprintShape, heatColor, openRing, project, ringCenter, sampleElevation, samplePacked,
+  footprintShape, openRing, project, ringCenter, sampleElevation, samplePacked,
   stallGrid, trailLength, toWorld, unproject, type LngLat,
 } from './geometry';
-
-export const PERSONA_COLORS: Record<PersonaId, string> = {
-  senior: '#8b5cf6', vendor: '#f97316', commuter: '#3b82f6', retailer: '#9ca3af',
-};
+import { AGENT_WHITE, MAP, PERSONA_COLORS, type AgentColors } from './style';
 
 export const ground = (city: CityModel, [lng, lat]: LngLat, lift: number) => sampleElevation(lng, lat, city.raster) * lift;
 
@@ -35,35 +36,31 @@ function densify(ring: readonly LngLat[], city: CityModel, step = 3): LngLat[] {
 
 const PLATE_LIFT_M = 0.5;
 
-/** Selected-site centre draped on the (lifted) terrain: the base of the beam and label. */
+/** Selected-site centre draped on the (lifted) terrain: the camera focus and the label base. */
 export function siteAnchor(city: CityModel, candidate: Candidate, lift: number): [number, number, number] {
   const c = ringCenter(openRing(candidate.polygon));
   return toWorld(c, city.frame, ground(city, c, lift) + PLATE_LIFT_M);
 }
 
-/** Height of the selected site's light beam; the label sits just above it. */
-export const BEAM_M = 120;
+/** Height of the selected site's name label above the site. */
+export const LABEL_LIFT_M = 36;
 const scratch = new Object3D();
 
-/** Selected and rank-one sites glow brightest; failed sites stay a dim rose. */
-function candidateColor(candidate: Candidate, selected: boolean, maxRank: number) {
-  if (selected) return new Color('#67e8f9');
-  if (!candidate.passedFilter) return new Color('#f43f5e');
-  if (candidate.kind === 'benchmark') return new Color('#a78bfa');
-  if (candidate.quickRank === undefined || maxRank <= 1) return new Color('#22d3ee');
-  return new Color('#34d399').lerp(new Color('#0ea5e9'), (candidate.quickRank - 1) / (maxRank - 1));
-}
+/** Screen width of the selected site's outline, CSS pixels. */
+const SELECTED_OUTLINE_PX = 2.5;
 
-function CandidateSite({ city, candidate, selected, maxRank, lift, onSelect }: {
-  city: CityModel; candidate: Candidate; selected: boolean; maxRank: number; lift: number;
+function CandidateSite({ city, candidate, selected, lift, onSelect }: {
+  city: CityModel; candidate: Candidate; selected: boolean; lift: number;
   onSelect?: (id: string) => void;
 }) {
-  const plate = useRef<MeshBasicMaterial>(null);
-  const { shape, outline, center } = useMemo(() => {
+  const dpr = useThree((state) => state.viewport.dpr);
+  const { shape, outline, wide } = useMemo(() => {
     const ring = densify(openRing(candidate.polygon), city);
     const points = [...ring, ring[0]].flatMap((point) => toWorld(point, city.frame, ground(city, point, lift) + PLATE_LIFT_M + 0.15));
     const line = new BufferGeometry();
     line.setAttribute('position', new Float32BufferAttribute(points, 3));
+    const wideGeometry = new LineGeometry();
+    wideGeometry.setPositions(points);
     // The plate lies in the (east, north) plane; its local z becomes world y after the −90° turn,
     // so each vertex is draped onto the terrain under it.
     const plateGeometry = new ShapeGeometry(footprintShape([ring], city.frame));
@@ -74,16 +71,23 @@ function CandidateSite({ city, candidate, selected, maxRank, lift, onSelect }: {
     }
     positions.needsUpdate = true;
     plateGeometry.computeBoundingSphere();
-    return { shape: plateGeometry, outline: line, center: siteAnchor(city, candidate, lift) };
+    return { shape: plateGeometry, outline: line, wide: wideGeometry };
   }, [city, candidate, lift]);
-  useLayoutEffect(() => () => { shape.dispose(); outline.dispose(); }, [shape, outline]);
-  const color = candidateColor(candidate, selected, maxRank);
-  // The selected outline and beam are HDR (above the bloom threshold); other sites stay calm.
-  const outlineColor = selected ? color.clone().multiplyScalar(2.6) : color;
-  const base = selected ? 0.5 : candidate.passedFilter ? 0.28 : 0.14;
-  useFrame(({ clock }) => {
-    if (plate.current) plate.current.opacity = selected ? base + 0.18 * Math.sin(clock.elapsedTime * 2.4) : base;
-  });
+  useLayoutEffect(() => () => { shape.dispose(); outline.dispose(); wide.dispose(); }, [shape, outline, wide]);
+  // The selected site: a white outline a few pixels wide and a faint white fill, drawn over the
+  // buildings so a ground-floor site still reads. Other sites: a thin grey outline.
+  const wideLine = useMemo(() => {
+    const material = new LineMaterial({ color: new Color(MAP.siteSelected), linewidth: SELECTED_OUTLINE_PX, depthTest: false, transparent: true });
+    const line = new Line2(wide, material);
+    line.renderOrder = 11;
+    line.raycast = () => {};
+    return line;
+  }, [wide]);
+  useLayoutEffect(() => () => wideLine.material.dispose(), [wideLine]);
+  // LineMaterial widths are in drawing-buffer pixels.
+  useLayoutEffect(() => { wideLine.material.linewidth = SELECTED_OUTLINE_PX * dpr; }, [wideLine, dpr]);
+  const color = selected ? MAP.siteSelected : MAP.site;
+  const fill = selected ? 0.12 : candidate.passedFilter ? 0.04 : 0.02;
   const click = (event: ThreeEvent<MouseEvent>) => {
     if (event.delta > 4) return;
     event.stopPropagation();
@@ -92,24 +96,18 @@ function CandidateSite({ city, candidate, selected, maxRank, lift, onSelect }: {
   return (
     <group>
       {/* Shape is in the (east, north) plane; rotating −90° about x maps north to −z. */}
-      <mesh geometry={shape} rotation-x={-Math.PI / 2} onClick={click}
+      <mesh geometry={shape} rotation-x={-Math.PI / 2} onClick={click} renderOrder={9}
         onPointerOver={() => { document.body.style.cursor = 'pointer'; }}
         onPointerOut={() => { document.body.style.cursor = ''; }}>
-        <meshBasicMaterial ref={plate} color={color} transparent opacity={base} side={DoubleSide}
-          depthWrite={false} blending={AdditiveBlending} toneMapped={false} />
+        <meshBasicMaterial color={color} transparent opacity={fill} side={DoubleSide} depthWrite={false}
+          depthTest={!selected} />
       </mesh>
-      <lineLoop geometry={outline} renderOrder={10}>
-        <lineBasicMaterial color={outlineColor} transparent opacity={selected ? 1 : 0.75}
-          depthTest={false} toneMapped={false} />
-      </lineLoop>
-      {/* The name label is a DOM overlay owned by CityThree (LabelAnchor), not drei <Html>. */}
-      {selected && (
-        <mesh position={[center[0], center[1] + BEAM_M / 2, center[2]]}>
-          <cylinderGeometry args={[1.2, 5, BEAM_M, 16, 1, true]} />
-          <meshBasicMaterial color={outlineColor} transparent opacity={0.16} blending={AdditiveBlending}
-            depthWrite={false} side={DoubleSide} toneMapped={false} />
-        </mesh>
+      {selected ? <primitive object={wideLine} /> : (
+        <lineLoop geometry={outline} renderOrder={10}>
+          <lineBasicMaterial color={color} transparent opacity={candidate.passedFilter ? 0.55 : 0.3} depthTest={false} />
+        </lineLoop>
       )}
+      {/* The name label is a DOM overlay owned by CityThree (LabelAnchor), not drei <Html>. */}
     </group>
   );
 }
@@ -117,92 +115,176 @@ function CandidateSite({ city, candidate, selected, maxRank, lift, onSelect }: {
 export function Candidates({ city, candidates, selectedId, lift, onSelect }: {
   city: CityModel; candidates: Candidate[]; selectedId: string | null; lift: number; onSelect?: (id: string) => void;
 }) {
-  const maxRank = Math.max(1, ...candidates.map((c) => c.quickRank ?? 1));
   return (
     <group name="candidates">
       {candidates.filter((c) => c.polygon.length >= 3).map((candidate) => (
-        <CandidateSite key={candidate.id} city={city} candidate={candidate} maxRank={maxRank} lift={lift}
+        <CandidateSite key={candidate.id} city={city} candidate={candidate} lift={lift}
           selected={candidate.id === selectedId} onSelect={onSelect} />
       ))}
     </group>
   );
 }
 
+/** Sim seconds between trail points. */
 const TRAIL_STEP_S = 5;
-/** HDR gain on the head colour, so agents clear the bloom threshold and glow. */
-const HEAD_GAIN = 2.4;
-const TRIP_RADIUS_M = 1.8;
+/** Dot diameters in CSS pixels: the head, and the last trail point. Constant on screen. */
+const HEAD_PX = 7;
+const TAIL_PX = 2.5;
+/** Opacity of the dot parts hidden behind buildings, drawn as a faint x-ray. */
+const OCCLUDED_OPACITY = 0.3;
+/** Dots float this far above the terrain. */
+const DOT_LIFT_M = 1.6;
 
 /** Flat [x, y, z, t] per path point, in world axes on the (lifted) terrain. */
 function packPath(city: CityModel, path: [number, number, number][], lift: number) {
   const out = new Float32Array(path.length * 4);
   path.forEach(([lng, lat, t], i) => {
-    const [x, y, z] = toWorld([lng, lat], city.frame, ground(city, [lng, lat], lift) + 1.6);
+    const [x, y, z] = toWorld([lng, lat], city.frame, ground(city, [lng, lat], lift) + DOT_LIFT_M);
     out.set([x, y, z, t], i * 4);
   });
   return out;
 }
 
+// One camera-facing quad per instance, offset in clip space so the dot keeps its pixel size at
+// any distance. `position` is the quad corner in [-1, 1].
+const DOT_VERTEX = /* glsl */ `
+attribute vec3 aCenter;
+attribute vec3 aColor;
+attribute float aSize;
+attribute float aAlpha;
+uniform vec2 uResolution;
+uniform float uPixelRatio;
+varying vec3 vColor;
+varying float vAlpha;
+varying vec2 vCorner;
+#include <clipping_planes_pars_vertex>
+void main() {
+  vColor = aColor;
+  vAlpha = aAlpha;
+  vCorner = position.xy;
+  vec4 mvPosition = modelViewMatrix * vec4(aCenter, 1.0);
+  vec4 clip = projectionMatrix * mvPosition;
+  clip.xy += position.xy * aSize * uPixelRatio / uResolution * clip.w;
+  gl_Position = clip;
+  #include <clipping_planes_vertex>
+}`;
+
+const DOT_FRAGMENT = /* glsl */ `
+uniform float uOpacity;
+varying vec3 vColor;
+varying float vAlpha;
+varying vec2 vCorner;
+#include <clipping_planes_pars_fragment>
+void main() {
+  #include <clipping_planes_fragment>
+  float r = dot(vCorner, vCorner);
+  if (r > 1.0) discard;
+  gl_FragColor = vec4(vColor, vAlpha * uOpacity * (1.0 - smoothstep(0.5, 1.0, r)));
+  #include <colorspace_fragment>
+}`;
+
+function dotMaterial(opacity: number, occluded: boolean) {
+  return new ShaderMaterial({
+    vertexShader: DOT_VERTEX, fragmentShader: DOT_FRAGMENT,
+    uniforms: { uResolution: { value: new Vector2(1, 1) }, uPixelRatio: { value: 1 }, uOpacity: { value: opacity } },
+    transparent: true, depthWrite: false, clipping: true,
+    ...(occluded && { depthFunc: GreaterDepth }),
+  });
+}
+
+/** Instanced quad with dynamic per-instance centre, colour, size and opacity for `capacity` dots. */
+function dotGeometry(capacity: number) {
+  const g = new InstancedBufferGeometry();
+  g.setAttribute('position', new Float32BufferAttribute([-1, -1, 0, 1, -1, 0, 1, 1, 0, -1, 1, 0], 3));
+  g.setIndex([0, 1, 2, 0, 2, 3]);
+  for (const [name, size] of [['aCenter', 3], ['aColor', 3], ['aSize', 1], ['aAlpha', 1]] as const) {
+    g.setAttribute(name, new InstancedBufferAttribute(new Float32Array(capacity * size), size).setUsage(DynamicDrawUsage));
+  }
+  g.instanceCount = 0;
+  return g;
+}
+
 /**
- * Agents as one instanced mesh sized for thousands of trips. Each frame the visible instances are
- * packed to the front (matrix and colour written straight into the instance buffers), so hidden
- * agents cost nothing and positions interpolate continuously between path points.
+ * Agents as round dots of constant screen size, one per trip in the live result, on the real
+ * clock: a dot shows while its trip is under way and moves at the trip's own pace. Each head has
+ * a short trail of smaller, fainter dots at earlier sim times. All dots are instances of one quad,
+ * so a full-scale run of a few thousand agents draws in two calls: every frame the visible
+ * instances are packed to the front of the buffers, positions interpolated between path points.
+ * Dots behind buildings stay visible as a faint x-ray. `onCount` receives the number of agents
+ * drawn whenever it changes.
  */
-export function Trips({ city, trips, timeSec, lift }: {
+export function Trips({ city, trips, timeSec, lift, colors, onCount }: {
   city: CityModel; trips: SimulationResult['trips']; timeSec: number; lift: number;
+  colors: AgentColors; onCount?: (count: number) => void;
 }) {
-  const mesh = useRef<InstancedMesh>(null);
+  const gl = useThree((state) => state.gl);
   const time = useRef(timeSec);
   time.current = timeSec;
+  const report = useRef(onCount);
+  report.current = onCount;
+  const shown = useRef(-1);
   const trail = trailLength(trips.length);
   const paths = useMemo(() => trips.map((trip) => packPath(city, trip.path, lift)), [city, trips, lift]);
-  const count = Math.max(1, trips.length * trail);
-  /** Base colour per trip and trail step, HDR for the head. */
+  const capacity = Math.max(1, trips.length * trail);
+  const geometry = useMemo(() => dotGeometry(capacity), [capacity]);
+  const materials = useMemo(() => ({ visible: dotMaterial(1, false), hidden: dotMaterial(OCCLUDED_OPACITY, true) }), []);
+  useLayoutEffect(() => () => geometry.dispose(), [geometry]);
+  useLayoutEffect(() => () => { materials.visible.dispose(); materials.hidden.dispose(); }, [materials]);
+  useEffect(() => () => { report.current?.(0); }, []);
+  /** Linear colour per trip. */
   const palette = useMemo(() => {
-    const out = new Float32Array(trips.length * trail * 3);
+    const out = new Float32Array(trips.length * 3);
     const color = new Color();
     trips.forEach((trip, i) => {
-      for (let k = 0; k < trail; k++) {
-        color.set(PERSONA_COLORS[trip.persona] ?? '#e5e7eb').multiplyScalar(k === 0 ? HEAD_GAIN : 1.1 * (1 - k / trail) ** 1.5);
-        color.toArray(out, (i * trail + k) * 3);
-      }
+      color.set(colors === 'white' ? AGENT_WHITE : PERSONA_COLORS[trip.persona] ?? AGENT_WHITE).toArray(out, i * 3);
     });
     return out;
-  }, [trips, trail]);
+  }, [trips, colors]);
+  /** Size and opacity per trail step: the head first, then smaller and fainter. */
+  const steps = useMemo(() => Array.from({ length: trail }, (_, k) => {
+    const f = trail > 1 ? k / (trail - 1) : 0;
+    return k === 0 ? { size: HEAD_PX, alpha: 1 } : { size: HEAD_PX * 0.62 + (TAIL_PX - HEAD_PX * 0.62) * f, alpha: 0.55 * (1 - f) ** 1.4 + 0.06 };
+  }), [trail]);
   const point = useMemo(() => new Float32Array(3), []);
-  useLayoutEffect(() => {
-    // setColorAt allocates the instance colour buffer; the frame loop then writes it directly.
-    const target = mesh.current;
-    if (target && !target.instanceColor) target.setColorAt(0, new Color());
-  }, [count]);
+  const buffer = useMemo(() => new Vector2(), []);
   useFrame(() => {
-    const target = mesh.current;
-    if (!target || !target.instanceColor) return;
-    const matrices = target.instanceMatrix.array as Float32Array;
-    const colors = target.instanceColor.array as Float32Array;
-    let visible = 0;
+    const center = geometry.getAttribute('aCenter') as InstancedBufferAttribute;
+    const color = geometry.getAttribute('aColor') as InstancedBufferAttribute;
+    const size = geometry.getAttribute('aSize') as InstancedBufferAttribute;
+    const alpha = geometry.getAttribute('aAlpha') as InstancedBufferAttribute;
+    const c = center.array as Float32Array, col = color.array as Float32Array;
+    const s = size.array as Float32Array, a = alpha.array as Float32Array;
+    let visible = 0, heads = 0;
     for (let i = 0; i < paths.length; i++) {
-      for (let k = 0; k < trail; k++) {
+      // Tail first, so each agent's head draws over its own trail.
+      for (let k = trail - 1; k >= 0; k--) {
         if (!samplePacked(paths[i], time.current - k * TRAIL_STEP_S, point, 0)) continue;
-        const scale = TRIP_RADIUS_M * (k === 0 ? 1 : 0.8 - (0.45 * k) / trail);
-        const m = visible * 16;
-        matrices.fill(0, m, m + 16);
-        matrices[m] = matrices[m + 5] = matrices[m + 10] = scale;
-        matrices[m + 12] = point[0]; matrices[m + 13] = point[1]; matrices[m + 14] = point[2]; matrices[m + 15] = 1;
-        const c = (i * trail + k) * 3;
-        colors[visible * 3] = palette[c]; colors[visible * 3 + 1] = palette[c + 1]; colors[visible * 3 + 2] = palette[c + 2];
+        c[visible * 3] = point[0]; c[visible * 3 + 1] = point[1]; c[visible * 3 + 2] = point[2];
+        col[visible * 3] = palette[i * 3]; col[visible * 3 + 1] = palette[i * 3 + 1]; col[visible * 3 + 2] = palette[i * 3 + 2];
+        s[visible] = steps[k].size;
+        a[visible] = steps[k].alpha;
         visible++;
+        if (k === 0) heads++;
       }
     }
-    target.count = visible;
-    target.instanceMatrix.needsUpdate = true;
-    target.instanceColor.needsUpdate = true;
+    geometry.instanceCount = visible;
+    for (const attribute of [center, color, size, alpha]) {
+      attribute.clearUpdateRanges();
+      attribute.addUpdateRange(0, visible * attribute.itemSize);
+      attribute.needsUpdate = true;
+    }
+    gl.getDrawingBufferSize(buffer);
+    for (const material of [materials.visible, materials.hidden]) {
+      material.uniforms.uResolution.value.copy(buffer);
+      material.uniforms.uPixelRatio.value = gl.getPixelRatio();
+    }
+    if (heads !== shown.current) { shown.current = heads; report.current?.(heads); }
   });
   return (
-    <instancedMesh key={count} ref={mesh} args={[undefined, undefined, count]} frustumCulled={false}>
-      <icosahedronGeometry args={[1, 1]} />
-      <meshBasicMaterial blending={AdditiveBlending} transparent depthWrite={false} toneMapped={false} />
-    </instancedMesh>
+    <group name="agents">
+      <mesh geometry={geometry} material={materials.hidden} frustumCulled={false} renderOrder={30} raycast={() => null} />
+      <mesh geometry={geometry} material={materials.visible} frustumCulled={false} renderOrder={31} raycast={() => null} />
+    </group>
   );
 }
 
@@ -228,43 +310,33 @@ type HeatPoint = [number, number, number];
 const HEAT_FADE_S = 0.6;
 
 /**
- * Heat for one slice: a ground-draped glow disc and a light column per weighted point. Opacity
- * ramps toward 1 while `live` and toward 0 after, then the layer reports itself done.
+ * Heat for one slice: a ground-draped grey glow per weighted point, brighter and wider with
+ * weight. Opacity ramps toward 1 while `live` and toward 0 after, then the layer reports itself done.
  */
 function HeatLayer({ city, heat, lift, live, onDone }: {
   city: CityModel; heat: HeatPoint[]; lift: number; live: boolean; onDone: () => void;
 }) {
   const discs = useRef<InstancedMesh>(null);
-  const columns = useRef<InstancedMesh>(null);
   const discMaterial = useRef<MeshBasicMaterial>(null);
-  const columnMaterial = useRef<MeshBasicMaterial>(null);
   const fade = useRef(0);
   const done = useRef(false);
   const count = Math.max(1, heat.length);
   const discGeometry = useMemo(() => new PlaneGeometry(1, 1).rotateX(-Math.PI / 2), []);
-  const columnGeometry = useMemo(() => new BoxGeometry(1, 1, 1).translate(0, 0.5, 0), []);
-  useLayoutEffect(() => () => { discGeometry.dispose(); columnGeometry.dispose(); }, [discGeometry, columnGeometry]);
+  useLayoutEffect(() => () => discGeometry.dispose(), [discGeometry]);
   useLayoutEffect(() => {
     const max = Math.max(...heat.map((point) => point[2]), Number.EPSILON);
     const color = new Color();
     heat.forEach(([lng, lat, weight], i) => {
       const t = weight / max;
       const [x, , z] = toWorld([lng, lat], city.frame);
-      const y = ground(city, [lng, lat], lift);
-      color.setRGB(...heatColor(t));
-      scratch.position.set(x, y + 0.8, z);
+      scratch.position.set(x, ground(city, [lng, lat], lift) + 0.8, z);
       scratch.scale.set(14 + 26 * t, 1, 14 + 26 * t);
       scratch.updateMatrix();
       discs.current?.setMatrixAt(i, scratch.matrix);
-      discs.current?.setColorAt(i, color.clone().multiplyScalar(0.5 + 1.1 * t));
-      scratch.position.set(x, y, z);
-      scratch.scale.set(2.2, 3 + 45 * t, 2.2);
-      scratch.updateMatrix();
-      columns.current?.setMatrixAt(i, scratch.matrix);
-      columns.current?.setColorAt(i, color.clone().multiplyScalar(0.4 + 1.6 * t));
+      discs.current?.setColorAt(i, color.setScalar(0.04 + 0.2 * t));
     });
-    for (const target of [discs.current, columns.current]) {
-      if (!target) continue;
+    const target = discs.current;
+    if (target) {
       target.count = heat.length;
       target.instanceMatrix.needsUpdate = true;
       if (target.instanceColor) target.instanceColor.needsUpdate = true;
@@ -275,18 +347,13 @@ function HeatLayer({ city, heat, lift, live, onDone }: {
     fade.current = Math.max(0, Math.min(1, fade.current + (live ? step : -step)));
     const eased = fade.current * fade.current * (3 - 2 * fade.current);
     if (discMaterial.current) discMaterial.current.opacity = eased;
-    if (columnMaterial.current) columnMaterial.current.opacity = 0.55 * eased;
     if (!live && fade.current === 0 && !done.current) { done.current = true; onDone(); }
   });
   return (
     <group name="heat">
       <instancedMesh key={`d${count}`} ref={discs} args={[discGeometry, undefined, count]} frustumCulled={false}>
         <meshBasicMaterial ref={discMaterial} map={radialGlow()} transparent opacity={0} blending={AdditiveBlending}
-          depthWrite={false} toneMapped={false} />
-      </instancedMesh>
-      <instancedMesh key={`c${count}`} ref={columns} args={[columnGeometry, undefined, count]} frustumCulled={false}>
-        <meshBasicMaterial ref={columnMaterial} transparent opacity={0} blending={AdditiveBlending} depthWrite={false}
-          toneMapped={false} />
+          depthWrite={false} />
       </instancedMesh>
     </group>
   );
@@ -318,12 +385,10 @@ export function Heat({ city, heat, lift, visible }: { city: CityModel; heat: Hea
 }
 
 const markerSphere = new SphereGeometry(1, 16, 12);
-/** HDR reds: bottlenecks are emissive and bloom. */
-const BOTTLENECK_CORE = new Color('#ef4444').multiplyScalar(2.8);
-const BOTTLENECK_RING = new Color('#f87171').multiplyScalar(1.8);
 const markerRing = new RingGeometry(0.8, 1, 48).rotateX(-Math.PI / 2);
 const markerBeam = new CylinderGeometry(0.4, 0.4, 1, 8, 1, true).translate(0, 0.5, 0);
 
+/** A white core, a pulsing white ring on the ground and a faint grey stem, sized by severity. */
 function BottleneckMarker({ city, bottleneck, phase, lift }: {
   city: CityModel; bottleneck: Bottleneck; phase: number; lift: number;
 }) {
@@ -333,32 +398,30 @@ function BottleneckMarker({ city, bottleneck, phase, lift }: {
   const [x, , z] = toWorld(point, city.frame);
   const y = ground(city, point, lift);
   const severity = Math.max(0, Math.min(1, bottleneck.severity));
-  const radius = 2.5 + 5 * severity;
+  const radius = 1.5 + 3 * severity;
   const group = useRef<Group>(null);
   const grow = useRef(0);
   useFrame(({ clock }, delta) => {
     // Markers grow in over half a second when a slice brings them in.
     grow.current = Math.min(1, grow.current + Math.min(delta, 0.1) / 0.5);
     group.current?.scale.setScalar(1 - (1 - grow.current) ** 3);
-    const wave = (clock.elapsedTime * 0.8 + phase) % 1;
+    const wave = (clock.elapsedTime * 0.6 + phase) % 1;
     if (ring.current) {
-      ring.current.scale.setScalar(radius * (1.2 + 3.5 * wave));
-      (ring.current.material as MeshBasicMaterial).opacity = 0.9 * (1 - wave);
+      ring.current.scale.setScalar(radius * (1.5 + 4 * wave));
+      (ring.current.material as MeshBasicMaterial).opacity = 0.7 * (1 - wave);
     }
-    if (core.current) core.current.scale.setScalar(radius * (0.85 + 0.15 * Math.sin(clock.elapsedTime * 5 + phase * 6.28)));
+    if (core.current) core.current.scale.setScalar(radius * (0.85 + 0.15 * Math.sin(clock.elapsedTime * 4 + phase * 6.28)));
   });
   return (
     <group ref={group} position={[x, y, z]} scale={0}>
-      <mesh ref={core} geometry={markerSphere} position-y={radius + 1}>
-        <meshBasicMaterial color={BOTTLENECK_CORE} toneMapped={false} />
+      <mesh ref={core} geometry={markerSphere} position-y={radius + 8 + 20 * severity}>
+        <meshBasicMaterial color="#f4f4f5" />
       </mesh>
       <mesh ref={ring} geometry={markerRing} position-y={0.6}>
-        <meshBasicMaterial color={BOTTLENECK_RING} transparent blending={AdditiveBlending} depthWrite={false}
-          side={DoubleSide} toneMapped={false} />
+        <meshBasicMaterial color="#ffffff" transparent depthWrite={false} side={DoubleSide} />
       </mesh>
-      <mesh geometry={markerBeam} scale={[1, 20 + 60 * severity, 1]}>
-        <meshBasicMaterial color="#ef4444" transparent opacity={0.35} blending={AdditiveBlending}
-          depthWrite={false} toneMapped={false} />
+      <mesh geometry={markerBeam} scale={[1, radius + 8 + 20 * severity, 1]}>
+        <meshBasicMaterial color="#a1a1aa" transparent opacity={0.35} depthWrite={false} />
       </mesh>
     </group>
   );
@@ -376,7 +439,7 @@ export function Bottlenecks({ city, bottlenecks, lift }: { city: CityModel; bott
 }
 
 /**
- * One block per stallExposure slot on the site, height and colour by visitors per slot.
+ * One grey block per stallExposure slot on the site, taller and lighter with visitors per slot.
  * Positions are illustrative: the contract carries per-slot exposure but no stall coordinates.
  * TODO(subagent): contract needs stall positions (SimulationResult.stalls[].lng/lat).
  */
@@ -405,7 +468,7 @@ export function Stalls({ city, candidate, exposure, lift }: {
       scratch.scale.set(size, 1 + 3 * t, size * 0.7);
       scratch.updateMatrix();
       target.setMatrixAt(i, scratch.matrix);
-      target.setColorAt(i, color.setRGB(...heatColor(t)));
+      target.setColorAt(i, color.setScalar(0.12 + 0.6 * t));
     });
     target.count = cells.length;
     target.instanceMatrix.needsUpdate = true;
@@ -414,8 +477,7 @@ export function Stalls({ city, candidate, exposure, lift }: {
   return (
     <instancedMesh key={count} ref={mesh} args={[geometry, undefined, count]} frustumCulled={false}
       renderOrder={insideBuilding ? 20 : 0} castShadow>
-      <meshStandardMaterial emissive="#0b3b4a" emissiveIntensity={0.6} roughness={0.6}
-        depthTest={!insideBuilding} toneMapped={false} />
+      <meshStandardMaterial roughness={1} depthTest={!insideBuilding} />
     </instancedMesh>
   );
 }

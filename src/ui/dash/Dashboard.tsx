@@ -1,16 +1,20 @@
+// The ?view=three dashboard: the 3D city fills the window, and compact dark glass panels float
+// over it. Left: the candidate list, the agent key and a corner event feed. Top centre: camera
+// and layer switches. Right: the site details, collapsible to a slim rail. Bottom: the clock bar.
 import { Component, useEffect, useMemo, useState, type ReactNode } from 'react';
 import type { TimeSlice } from '../../contracts';
+import { AgentLegend } from '../live/AgentLegend';
 import { onClock } from '../live/clock';
 import { EventFeed } from '../live/EventFeed';
 import { LiveBar } from '../live/LiveBar';
 import { useLiveSim } from '../live/useLiveSim';
 import { setState, useStore } from '../state/store';
-import CityThree, { type CameraMode, type Quality } from '../three/CityThree';
+import CityThree, { type AgentColors, type CameraMode, type Quality } from '../three/CityThree';
 import { bootDashboard } from './boot';
 import { CameraSwitch, CandidateList, ProfileCard, TopBar } from './left';
 import { rankCandidates, resultsFor } from './model';
 import { Constraints, PersonaCards, ScoreCard, StallGrid } from './right';
-import { Card } from './ui';
+import { Card, CollapseButton, Label } from './ui';
 
 const NO_MITIGATIONS: string[] = [];
 
@@ -21,6 +25,28 @@ class ViewBoundary extends Component<{ children: ReactNode }, { error: string | 
     if (this.state.error) return <div className="grid h-full place-items-center text-sm text-red-300" role="alert" data-testid="city-error">City view failed: {this.state.error}</div>;
     return this.props.children;
   }
+}
+
+/** Right column: the site details, or a slim rail with an expand button when collapsed. */
+function SidePanel({ children }: { children: ReactNode }) {
+  const [open, setOpen] = useState(true);
+  return (
+    <aside data-slot="side" data-testid="side-panel" data-open={open}
+      className={`pointer-events-auto flex min-h-0 shrink-0 flex-col gap-2 ${open ? 'w-[340px]' : 'w-9'}`}>
+      {open ? (
+        <div className="flex justify-end">
+          <Card className="p-0.5"><CollapseButton open onToggle={() => setOpen(false)} testId="side-collapse" label="site details" direction="right" /></Card>
+        </div>
+      ) : (
+        <Card className="flex flex-1 flex-col items-center gap-2 py-1.5">
+          <CollapseButton open={false} onToggle={() => setOpen(true)} testId="side-collapse" label="site details" direction="right" />
+          <Label className="[writing-mode:vertical-rl]">Site details</Label>
+        </Card>
+      )}
+      {/* Hidden, not unmounted, so the stall pick survives a collapse. */}
+      <div className={`${open ? 'flex' : 'hidden'} min-h-0 flex-1 flex-col gap-2 overflow-y-auto pr-0.5`}>{children}</div>
+    </aside>
+  );
 }
 
 export default function Dashboard() {
@@ -35,7 +61,9 @@ export default function Dashboard() {
   const [cameraMode, setCameraMode] = useState<CameraMode>('perspective');
   const [heatmap, setHeatmap] = useState(true);
   const [quality, setQuality] = useState<Quality>('high');
-  const [streets, setStreets] = useState(true);
+  // The surface overlay is opt-in: the default view is the plain grey street network.
+  const [streets, setStreets] = useState(false);
+  const [agentColors, setAgentColors] = useState<AgentColors>('persona');
 
   useEffect(() => { bootDashboard().catch((e) => { console.error(e); setState({ loading: false }); }); }, []);
 
@@ -55,52 +83,49 @@ export default function Dashboard() {
   const pickSlice = (s: TimeSlice) => setState({ slice: s });
 
   return (
-    <div className="flex h-screen w-screen flex-col overflow-hidden bg-background text-foreground">
-      <div className="flex min-h-0 flex-1 flex-col bg-[radial-gradient(ellipse_at_30%_40%,rgba(34,211,238,0.08),transparent_60%)]" data-testid="dashboard">
-        <TopBar result={result} scenario={scenario} slice={slice} />
-        <div className="grid min-h-0 flex-1 grid-cols-[1fr_520px]">
-          <main className="relative min-h-0 overflow-hidden" data-slot="city">
-            <div className="absolute inset-0">
-              <ViewBoundary>
-                <CityThree cameraMode={cameraMode} heatmap={heatmap} selectedId={selectedId}
-                  candidates={listed} result={cityResult} timeSec={live.timeSec} slice={slice} onSelect={select}
-                  quality={quality} streets={streets} />
-              </ViewBoundary>
-            </div>
-            {/* The top row takes the height the profile card and time bar leave; the candidate
-                list shrinks into it and scrolls, so the overlay never overflows the city view. */}
-            <div className="pointer-events-none absolute inset-0 flex flex-col gap-3 p-4">
-              <div className="flex min-h-0 flex-1 gap-4">
-                <div className="flex min-h-0 flex-col">
-                  <CandidateList ranked={ranked} selectedId={selectedId} brief={brief} scenario={scenario} onSelect={select} />
-                </div>
-                <div className="flex flex-1 flex-col items-center gap-3">
-                  <div className="pointer-events-auto">
-                    <CameraSwitch mode={cameraMode} heatmap={heatmap} onMode={setCameraMode} onHeatmap={() => setHeatmap((h) => !h)}
-                      quality={quality} onQuality={() => setQuality((q) => (q === 'high' ? 'fast' : 'high'))}
-                      streets={streets} onStreets={() => setStreets((s) => !s)} />
-                  </div>
-                  {loading && <Card className="pointer-events-auto px-4 py-2 text-sm text-cyan-300">Running the engine…</Card>}
-                </div>
-              </div>
-              <div className="flex items-end justify-between gap-3">
-                <div className="pointer-events-auto"><ProfileCard candidate={candidate} result={result} /></div>
-                <div className="pointer-events-auto"><EventFeed result={live.result} timeSec={live.timeSec} /></div>
-              </div>
+    <div className="relative h-screen w-screen overflow-hidden bg-[#0b0b0c] text-zinc-100">
+      <div className="absolute inset-0" data-testid="dashboard">
+        <main className="absolute inset-0" data-slot="city">
+          <ViewBoundary>
+            <CityThree cameraMode={cameraMode} heatmap={heatmap} selectedId={selectedId}
+              candidates={listed} result={cityResult} timeSec={live.timeSec} slice={slice} onSelect={select}
+              quality={quality} streets={streets} agentColors={agentColors} />
+          </ViewBoundary>
+        </main>
+        {/* The overlay passes pointer events through to the city except on the panels. */}
+        <div className="pointer-events-none absolute inset-0 flex flex-col gap-2 p-2 pb-5">
+          <TopBar result={result} scenario={scenario} slice={slice} />
+          <div className="flex min-h-0 flex-1 gap-2">
+            <div className="flex min-h-0 w-[272px] shrink-0 flex-col gap-2">
+              <CandidateList ranked={ranked} selectedId={selectedId} brief={brief} scenario={scenario} onSelect={select} />
+              <div className="min-h-0 flex-1" />
               <div className="pointer-events-auto">
-                <LiveBar live={live} slice={slice} scenario={scenario} ready={!loading && candidates.length > 0} onSlice={pickSlice} />
+                <AgentLegend result={live.result} view={cityResult} timeSec={live.timeSec} colors={agentColors} onColors={setAgentColors} />
               </div>
+              <div className="pointer-events-auto"><EventFeed result={live.result} timeSec={live.timeSec} /></div>
             </div>
-          </main>
-          <aside className="flex min-h-0 flex-col gap-3 overflow-y-auto border-l border-cyan-400/10 p-4" data-slot="side">
-            <ScoreCard score={current?.score ?? null} rank={current?.rank ?? null} of={ranked.length} candidate={candidate} brief={brief} />
-            {result && result.stallExposure.length > 0 && <StallGrid key={result.candidateId} result={result} />}
-            <PersonaCards result={result} />
-            <Constraints result={result} brief={brief} candidate={candidate} slice={slice} />
-          </aside>
+            <div className="flex min-w-0 flex-1 flex-col items-center gap-2">
+              <div className="pointer-events-auto">
+                <CameraSwitch mode={cameraMode} heatmap={heatmap} onMode={setCameraMode} onHeatmap={() => setHeatmap((h) => !h)}
+                  quality={quality} onQuality={() => setQuality((q) => (q === 'high' ? 'fast' : 'high'))}
+                  streets={streets} onStreets={() => setStreets((s) => !s)} />
+              </div>
+              {loading && <Card className="pointer-events-auto px-3 py-1 text-xs text-cyan-300">Running the engine…</Card>}
+            </div>
+            <SidePanel>
+              <ScoreCard score={current?.score ?? null} rank={current?.rank ?? null} of={ranked.length} candidate={candidate} brief={brief} />
+              <ProfileCard candidate={candidate} result={result} />
+              {result && result.stallExposure.length > 0 && <StallGrid key={result.candidateId} result={result} />}
+              <PersonaCards result={result} />
+              <Constraints result={result} brief={brief} candidate={candidate} slice={slice} />
+            </SidePanel>
+          </div>
+          <div className="pointer-events-auto">
+            <LiveBar live={live} slice={slice} scenario={scenario} ready={!loading && candidates.length > 0} onSlice={pickSlice} />
+          </div>
         </div>
       </div>
-      <footer className="border-t border-border px-4 py-1 text-sm text-muted" data-testid="attribution">
+      <footer className="pointer-events-none absolute inset-x-0 bottom-0 truncate px-3 pb-0.5 text-[10px] text-zinc-500" data-testid="attribution">
         Datenquelle: Bayerische Vermessungsverwaltung – www.geodaten.bayern.de, CC BY 4.0 · © OpenStreetMap contributors · Destatis, Zensus 2022, dl-de/by-2-0 · VGN
       </footer>
     </div>
