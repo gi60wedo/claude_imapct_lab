@@ -54,6 +54,19 @@ describe('review regressions', () => {
     expect(both.topFriction).toMatch(/^0 m carry/);
   });
 
+  it("uses Part A's evidence.loadingPoint in place of the world's benchmark points", () => {
+    const w = world([node(-200), node(-70), node(-40), node(0)],
+      [edge(0, 1, 130, true), edge(1, 2, 30, true), edge(2, 3, 40, true)]);
+    w.pois.vanEntries = [xy(-200)];
+    const withWorld = { ...w, loadingPoints: { [site.id]: [xy(-70)] } };
+    const run = (cand: typeof site) => simulate(prepared(withWorld), cand, opts).personas.vendor;
+    const worldOnly = run(site);
+    const prep = run({ ...site, evidence: { loadingPoint: xy(0) } } as unknown as typeof site);
+    expect(worldOnly.topFriction).toMatch(/^\d+ m carry/);
+    expect(prep.score).toBeGreaterThan(worldOnly.score);
+    expect(prep.topFriction).toMatch(/^0 m carry/);
+  });
+
   it('improves vendor routing only when a new designated loading destination becomes usable, with a fixed seed', () => {
     const w = world([node(-200), { ...node(-70), loadingPoint: true }, node(0)],
       [edge(0, 1, 130, true), edge(1, 2, 70, true)]);

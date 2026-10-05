@@ -222,7 +222,7 @@ export function simulate(pw: PreparedWorld, cand: Candidate, opts: SimOptions): 
   }
 
   // ── Vendors (Markus) ─────────────────────────────────────────────────────────
-  const vendor = simulateVans(pw, ctx, mitigations, cand.id, poly, cx, cy, reach, siteAvailable, slots.length, trips, rng);
+  const vendor = simulateVans(pw, ctx, mitigations, cand.id, cand.evidence?.loadingPoint, poly, cx, cy, reach, siteAvailable, slots.length, trips, rng);
 
   // ── Ticks: heat, crowding, elevators ─────────────────────────────────────────
   const ticks = runTicks(pw, trips, up);
@@ -379,7 +379,8 @@ function chooseStalls(r: Rng, slots: [number, number][], x: number, y: number, l
 
 // ── Vans ───────────────────────────────────────────────────────────────────────
 
-function simulateVans(pw: PreparedWorld, ctx: CostContext, mitigations: Mitigation[], candidateId: string, poly: [number, number][],
+function simulateVans(pw: PreparedWorld, ctx: CostContext, mitigations: Mitigation[], candidateId: string,
+  prepLoadingPoint: [number, number] | undefined, poly: [number, number][],
                       cx: number, cy: number, reach: number, siteAvailable: boolean, stalls: number,
                       trips: Trip[], rng: Rng) {
   const g = pw.g;
@@ -391,7 +392,10 @@ function simulateVans(pw: PreparedWorld, ctx: CostContext, mitigations: Mitigati
 
   // A loadingPoints entry restricts unloading to designated points; without one, the single
   // vehicle-legal node nearest the stalls serves as the baseline loading point.
-  const designatedOnly = Object.hasOwn(pw.world.loadingPoints ?? {}, candidateId);
+  // Part A's prep computes each candidate's legal 05:30 van stop; it is the authority when present.
+  // Otherwise the world's surveyed benchmark points apply; otherwise the nearest vehicle-legal node.
+  const designated: [number, number][] = prepLoadingPoint ? [prepLoadingPoint] : pw.world.loadingPoints?.[candidateId] ?? [];
+  const designatedOnly = prepLoadingPoint !== undefined || Object.hasOwn(pw.world.loadingPoints ?? {}, candidateId);
   const nearby = g.nodesWithin(cx, cy, reach + P.VENDOR_MAX_CARRY_M,
     (i) => (!designatedOnly || nodes[i].loadingPoint === true) && pw.isVanNode(i) && distPoly(i) <= P.VENDOR_MAX_CARRY_M);
   const loading = designatedOnly || nearby.length === 0 ? nearby
@@ -401,7 +405,7 @@ function simulateVans(pw: PreparedWorld, ctx: CostContext, mitigations: Mitigati
     const i = g.nearest(x, y, 60, pw.isVanNode);
     if (i >= 0 && distPoly(i) <= P.VENDOR_MAX_CARRY_M && !loading.includes(i)) loading.push(i);
   };
-  for (const [lng, lat] of pw.world.loadingPoints?.[candidateId] ?? []) addLoadingPoint(lng, lat);
+  for (const [lng, lat] of designated) addLoadingPoint(lng, lat);
   for (const m of mitigations) {
     if (m.kind !== 'loading_point') continue;
     addLoadingPoint(m.lng, m.lat);

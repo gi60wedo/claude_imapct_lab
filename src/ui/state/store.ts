@@ -51,3 +51,11 @@ export function currentResults(s: UiState): Record<string, SimulationResult> {
   for (const r of Object.values(s.results)) if (r.scenario === s.scenario) out[r.candidateId] = r;
   return out;
 }
+
+/** Candidates to simulate: Part A's shortlist (top 4 passing by quickRank plus the benchmarks), or every passing one when unranked. */
+export function pickShortlist(candidates: Candidate[]): Candidate[] {
+  const passed = candidates.filter((c) => c.passedFilter);
+  if (!passed.some((c) => c.quickRank !== undefined)) return passed;
+  const top = new Set([...passed].sort((a, b) => (a.quickRank ?? 1e9) - (b.quickRank ?? 1e9)).slice(0, 4).map((c) => c.id));
+  return passed.filter((c) => top.has(c.id) || c.kind === 'benchmark');
+}

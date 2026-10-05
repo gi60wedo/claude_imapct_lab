@@ -3,7 +3,7 @@ import type { Scenario, SimulationResult } from '../../contracts';
 import Compare from '../compare/Compare';
 import { sim } from '../adapters';
 import { ScenarioUnavailableError } from '../adapters/types';
-import { currentResults, getState, resultKey, setState, useStore } from '../state/store';
+import { currentResults, getState, pickShortlist, resultKey, setState, useStore } from '../state/store';
 
 const SCENARIOS: { id: Scenario; label: string }[] = [
   { id: 'SUNNY_SAT', label: 'Sunny' },
@@ -26,7 +26,7 @@ export default function WhatIfBar() {
     setRunning(next);
     try {
       const { candidates } = getState();
-      const shortlist = candidates.filter((c) => c.passedFilter);
+      const shortlist = pickShortlist(candidates);
       const settled = await Promise.allSettled(shortlist.map((c) => sim.run(c.id, next, [], 42)));
       const failed = settled.find((r): r is PromiseRejectedResult => r.status === 'rejected');
       if (failed) {

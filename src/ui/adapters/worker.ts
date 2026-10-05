@@ -13,7 +13,7 @@ const getJson = async <T>(url: string): Promise<T> => {
 
 /**
  * Live SimClient backed by B's engine in a Web Worker.
- * Candidates come from the fixture list (A's discovery output later); the three benchmarks
+ * Candidates come from Part A (/data/candidates.json), else the fixture list, whose three benchmarks
  * take the engine's surveyed polygons from /data/benchmarks.json.
  */
 export function workerSim(): SimClient {
@@ -41,7 +41,10 @@ export function workerSim(): SimClient {
   let candidates: Promise<Candidate[]> | null = null;
   /** UI id → engine benchmark id; the engine keys loading points by its own ids. */
   const engineIds = new Map<string, string>();
-  const loadCandidates = () => (candidates ??= Promise.all([
+  const loadCandidates = () => (candidates ??= getJson<{ candidates: Candidate[] }>('/data/candidates.json')
+    .then((f) => f.candidates)          // Part A's discovered candidates; ids match the engine's benchmark ids
+    .catch(() => fixtureCandidates()));
+  const fixtureCandidates = () => Promise.all([
     fixtureSim.candidates(),
     getJson<Candidate[]>('/data/benchmarks.json'),
   ]).then(([list, bench]) => {
@@ -51,7 +54,7 @@ export function workerSim(): SimClient {
       if (b) engineIds.set(c.id, b.id);
       return b ? { ...c, polygon: b.polygon, areaM2: b.areaM2 } : c;
     });
-  }));
+  });
 
   return {
     candidates: loadCandidates,
