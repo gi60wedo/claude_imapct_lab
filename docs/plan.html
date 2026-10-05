@@ -1,0 +1,193 @@
+<!doctype html><html><head><meta charset="utf-8"><title>UrbanTwin: Market-Sim — Group Implementation Plan</title>
+<style>
+@page{size:A4;margin:16mm 14mm}
+body{font:10.2pt/1.45 "Inter","Helvetica Neue",Arial,sans-serif;color:#1d232b}
+h1{font-size:21pt;margin:0 0 2px}h2{font-size:13.5pt;margin:20px 0 6px;border-bottom:2px solid #2b6cb0;padding-bottom:3px;color:#1a4a80}
+h3{font-size:11pt;margin:12px 0 4px}.sub{color:#5a6573;margin:0 0 12px}
+table{border-collapse:collapse;width:100%;margin:6px 0 10px;font-size:9.2pt}th,td{border:1px solid #c9d1db;padding:4px 6px;vertical-align:top;text-align:left}
+th{background:#eaf1f9}code,pre{font:8.6pt "JetBrains Mono",Consolas,monospace}pre{background:#f4f6f9;border:1px solid #dde3ea;padding:7px;white-space:pre-wrap;margin:6px 0}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}.card{border:1px solid #c9d1db;border-radius:6px;padding:8px 10px;break-inside:avoid}
+.card h3{margin-top:0}.p1{border-top:4px solid #2b6cb0}.p2{border-top:4px solid #c05621}.p3{border-top:4px solid #2f855a}.p4{border-top:4px solid #6b46c1}
+ul{margin:3px 0 3px 18px;padding:0}li{margin:1px 0}.gate{background:#fff8e6;border-left:4px solid #d69e2e;padding:5px 9px;margin:6px 0}
+.brk{break-before:page}.small{font-size:8.8pt;color:#5a6573}
+.flow{display:flex;align-items:center;gap:5px;margin:6px 0 8px}.box{flex:1;min-width:0;border:1px solid #c9d1db;border-radius:6px;padding:6px;font-size:8.8pt;background:#f7f9fc}.arr{font-size:14pt;color:#2b6cb0}pre,table tr,.gate{break-inside:avoid}h2{break-after:avoid}.steps .box{font-size:8pt;padding:4px}.steps .arr{font-size:10pt}.steps{gap:3px}</style></head><body>
+<h1>UrbanTwin: Market-Sim</h1>
+<p class="sub">Group implementation plan · Claude Impact Lab #2, Track 2 · Fraunhofer IIS Nürnberg · 7-hour build (13:00–20:00) · 4 people</p>
+
+<h2>1. What we ship</h2>
+<p>A browser decision tool that answers "where should Nuremberg's vegetable market go?". The tool does not start from two fixed sites. It scans the inner city for candidate spaces, filters out the unsuitable ones, ranks the rest, and runs a persona-based pedestrian and delivery simulation on the shortlist. The official candidates (Hauptmarkt, Lorenzkirche, former Kaufhof) always appear as benchmarks. Claude explains the computed result, and a what-if panel recalculates the result under different conditions and priorities.</p>
+<div class="flow steps"><div class="box"><b>1 Discover</b><br>squares, pedestrian areas, vacant ground floors</div><div class="arr">→</div><div class="box"><b>2 Filter</b><br>space, transit, <b>delivery access</b></div><div class="arr">→</div><div class="box"><b>3 Rank</b><br>quick indicator score</div><div class="arr">→</div><div class="box"><b>4 Simulate</b><br>personas on top 3–5</div><div class="arr">→</div><div class="box"><b>5 Visualize</b><br>exposure heatmap</div><div class="arr">→</div><div class="box"><b>6 Score</b><br>MarketScore + per persona</div><div class="arr">→</div><div class="box"><b>7 Recommend</b><br>Claude</div><div class="arr">→</div><div class="box"><b>8 What-if</b><br>rain, event, weights</div></div>
+<p>Two principles shape the design:</p>
+<ul>
+<li><b>Deliveries are part of the model.</b> A site with high footfall that a 3.5-ton van cannot reach at 05:30 fails. Delivery access is a hard filter in step 2 and a score factor in step 6.</li>
+<li><b>Stakeholders disagree, and the tool shows it.</b> The MarketScore is a weighted sum, but the screen always shows the four persona scores beside it. A high total cannot hide a group that loses badly.</li>
+</ul>
+<p>The deliverables are:</p>
+<ul>
+  <li>the live app,</li>
+  <li>a 45–60 second recorded simulation video (the pitch opener and the backup if the network fails),</li>
+  <li>a 2-minute pitch.</li>
+</ul>
+
+<h2>2. Scope priorities</h2>
+<table><tr><th style="width:14%">Priority</th><th>Scope</th></tr>
+<tr><td><b>Must ship</b></td><td>About 15 candidates discovered in the Altstadt and inner ring, filter and ranking, persona simulation on the top 3 plus benchmarks, heatmap, MarketScore with adjustable weights, Claude recommendation, one what-if (rainy Saturday)</td></tr>
+<tr><td><b>Should</b></td><td>Christmas-market what-if, weight presets (accessibility first, trader fairness first, local business first), side-by-side compare</td></tr>
+<tr><td><b>Stretch</b></td><td>Citywide discovery beyond the inner ring, live candidate drawing on the map</td></tr></table>
+
+
+<h2 class="brk">3. Prior work and what we take from it</h2>
+<table><tr><th style="width:30%">Work</th><th>What it shows</th><th style="width:32%">What we adopt</th></tr>
+<tr><td>Park et al., <i>Generative Agents: Interactive Simulacra of Human Behavior</i> (Stanford/Google, arXiv:2304.03442)</td><td>LLM agents with profiles, memory, reflection and daily plans produce believable behavior in a sandbox town.</td><td>Persona profiles with goals, budgets and daily schedules. We skip memory streams: 100 agents × 15 ticks is too slow and costly for a live demo.</td></tr>
+<tr><td>Verma et al., <i>Generative agents in the streets: exploring LLMs in collecting urban perceptions</i> (arXiv:2312.13126)</td><td>LLM agents with personas judge street environments from Street View imagery and OSM. The paper is about <b>perception</b>, not route choice.</td><td>Persona-specific judgments of a site ("too crowded for my rollator"), written by Claude from the computed metrics</td></tr>
+<tr><td>Zheng et al., <i>Urban planning in the era of large language models</i> (MIT Senseable City Lab, Nature Computational Science, 2025)</td><td>A conceptualize → generate → evaluate loop in which synthetic residents use competing designs and the designs are scored on equity, travel distance and facility use.</td><td>Evaluating competing sites with synthetic residents, using equity and travel distance as criteria (our Fairness and Accessibility)</td></tr>
+<tr><td>Zhou et al., <i>LiPUP-MA: a residential experience-centric multi-agent framework for living-in-the-loop participatory urban planning</i> (arXiv:2412.20505), the cyclical "plan, live, judge" line of work</td><td>Planner agents propose, resident agents "live" in the plan and complain, and the plan is revised in cycles.</td><td>The <b>propose → simulate → judge</b> loop: Claude proposes a mitigation, the engine reruns, and the personas judge the result</td></tr>
+<tr><td>Piao et al., <i>AgentSociety</i> (arXiv:2502.08691) and Yan et al., <i>OpenCity</i> (arXiv:2410.21286)</td><td>Thousands of LLM agents run in GIS environments to study mobility and policy responses. Scaling them requires batching and grouping agents.</td><td>The OpenCity idea of grouping agents into archetypes: one LLM call per persona, not per agent</td></tr>
+<tr><td><i>When Plausible Is Not Realistic: Evaluating Human Mobility in LLM-Based Urban Simulation</i> (arXiv:2606.13835)</td><td>LLM-generated mobility can look plausible and still fail to match real movement statistics.</td><td>The reason our <b>movement is rule-based and seeded</b>, and footfall is labeled "modeled exposure"</td></tr></table>
+<p><b>Our design position (hybrid):</b> deterministic Monte Carlo agents decide <i>where people walk and drive</i>. This part is fast, reproducible and testable. Claude decides <i>what it means</i>. It writes persona judgments, mediates trade-offs, and proposes mitigations that the engine then verifies. This combines the believability of generative agents with the reliability that a planning tool needs, and it puts us next to published work instead of reinventing it.</p>
+<p class="small">The "Awesome Urban LLM Agents" list (github.com/usail-hkust/Awesome-Urban-LLM-Agents) collects further work. We could not find a paper titled exactly "Planning, Living, and Judging", so we cite LiPUP-MA for the cyclical approach. Verify the titles before quoting them on slides.</p>
+<h2>4. Assets we already have</h2>
+<table><tr><th>Dataset (in <code>datasets/</code>)</th><th>Used in step</th><th>Used for</th></tr>
+<tr><td>OSM extract, Altstadt (12,889 features)</td><td>1, 2, 4</td><td>Candidate spaces (<code>place=square</code>, pedestrian areas, large ground floors), the walk and drive graph, 224 bollards, 60 U-Bahn entrances, 34 elevators, shops and attractions</td></tr>
+<tr><td>LoD2 CityGML, 4 × 2 km tiles (LDBV)</td><td>1, 4, 5</td><td>Building footprints and heights: open-space area per candidate, obstacles, the 3D view</td></tr>
+<tr><td>DGM1 1 m terrain, 9 tiles</td><td>3, 4</td><td>Slope per graph edge: senior friction and walkability</td></tr>
+<tr><td>DOP20 aerial photo and ALKIS parcels</td><td>1, 5</td><td>Base layer and visual check of candidate outlines</td></tr>
+<tr><td>Zensus 2022 100 m grid, 8,711 cells around Nuremberg: population (624k in the bbox, which includes part of Fürth), share aged 65+, average age</td><td>3, 4</td><td>Nearby population per candidate, home origins for resident agents, senior share for the persona mix</td></tr>
+<tr><td>VGN GTFS timetable</td><td>3, 4</td><td>Transit frequency per stop and U-Bahn arrival waves for commuter spawning</td></tr></table>
+<p class="small">All sources are open and need no API key. Required credits: "Datenquelle: Bayerische Vermessungsverwaltung – www.geodaten.bayern.de, CC BY 4.0", "© OpenStreetMap contributors", "Statistisches Bundesamt (Destatis), Zensus 2022, dl-de/by-2-0". The former Kaufhof footprint (Königstraße, about 49.4490, 11.0800) must be confirmed against LoD2 before 13:00.</p>
+
+<h2>5. Architecture</h2>
+<div class="flow"><div class="box"><b>prep/</b> (Python, offline)<br>OSM + LoD2 → candidates.json<br>OSM + DGM1 → graph.json<br>Zensus → population.json<br>GTFS → arrivals.json</div><div class="arr">→</div>
+<div class="box"><b>src/rank/</b> (TS)<br>filter + indicator score<br>for every candidate<br>→ shortlist</div><div class="arr">→</div>
+<div class="box"><b>src/sim/</b> (TS, Web Worker)<br>seeded persona agents<br>on the shortlist<br>→ SimulationResult</div><div class="arr">→</div>
+<div class="box"><b>UI</b> (React + deck.gl)<br>map · ranking · cockpit<br>weights · what-if<br><b>/api/brief</b> → Claude</div></div>
+<ul>
+  <li><b>Everything runs in the browser except Claude.</b> Ranking and simulation are pure, seeded TypeScript functions, so a what-if recalculation takes about a second and works offline.</li>
+  <li><b>Weights apply after simulation.</b> The simulation produces raw indicators once per site and scenario. Moving a weight slider only recomputes the weighted sum, so the ranking updates instantly.</li>
+  <li><b>One small server route</b> holds the Anthropic key and calls Claude. The key never reaches the browser.</li>
+  <li><b>Claude explains the numbers and never invents them.</b> The engine computes every number, and Claude interprets the trade-offs.</li>
+</ul>
+
+<h2>6. Data contracts (freeze at 13:20)</h2>
+<pre>type Candidate = { id: string; name: string; kind: "square"|"pedestrian"|"ground_floor"|"benchmark";
+  polygon: [lng, lat][]; areaM2: number;
+  indicators: { transitScore: number; walkScore: number; population800m: number;
+                retailPoi400m: number; attractions400m: number; deliveryAccess: boolean; vanDistM: number };
+  passedFilter: boolean; rejectReason?: string; quickRank?: number };
+
+type Scenario = "SUNNY_SAT" | "RAINY_SAT" | "CHRISTMAS_MARKET";
+type Weights  = { accessibility: number; footfall: number; fairness: number; localBusiness: number; walkability: number };
+
+type SimulationResult = { candidateId: string; scenario: Scenario; seed: number;
+  criteria: { accessibility: number; footfall: number; fairness: number; localBusiness: number; walkability: number }; // 0–100 each
+  personas: Record&lt;"senior"|"vendor"|"commuter"|"retailer", { score: number; served: number; droppedOut: number; topFriction: string }&gt;;
+  stallExposure: number[];          // visitors passing each stall slot, input to the fairness Gini
+  bottlenecks: { lat: number; lng: number; severity: number; time: string; cause: string }[];
+  trips: { persona: string; path: [lng, lat, tSec][] }[];  heat: [lng, lat, weight][] };
+
+type Brief = { recommended: string; why: string[]; comparisons: { site: string; betterAt: string; worseAt: string }[];
+  losers: { persona: string; mitigation: string }[]; councilBriefMd: string };</pre>
+<p>Commit <code>src/contracts.ts</code> and fixtures (<code>mock-candidates.json</code>, <code>mock-result-*.json</code>) at 13:20. After that, nobody waits on anyone.</p>
+
+<h2>7. Roles</h2>
+<div class="grid">
+<div class="card p1"><h3>A · Geodata, Discovery &amp; Ranking</h3>
+<p><b>Owns:</b> <code>prep/</code>, <code>public/data/</code>, <code>src/rank/</code>, video recording</p>
+<ul><li><b>Discover:</b> extract about 15–25 candidates from OSM: <code>place=square</code>, pedestrian areas above 800 m², large vacant ground floors. Add the 3 benchmarks.</li>
+<li><b>Indicators</b> per candidate: open area (after subtracting LoD2 buildings), transit frequency from GTFS stops within 300 m, population within 800 m from Zensus, retail and attraction POIs within 400 m, slope</li>
+<li><b>Filter:</b> area below 800 m², no transit stop within 400 m, or no van route to a loading point within 80 m (using vehicle-access edges and bollards) → rejected, with a stated reason</li>
+<li><b>Rank:</b> normalized indicator score, top 3–5 plus benchmarks → shortlist</li>
+<li><code>graph.json</code> (edges with steps, bollard, slope, vehicleAllowed) and <code>population.json</code></li>
+<li>After 16:30: the Playwright script that records the video</li></ul>
+<p class="small"><b>Done when:</b> the candidate map shows rejected sites greyed out with reasons, the shortlist is defensible, and Lorenzkirche gets flagged for delivery access.</p></div>
+
+<div class="card p2"><h3>B · Pedestrian &amp; Delivery Twin</h3>
+<p><b>Owns:</b> <code>src/sim/</code> (pure TypeScript, Vitest)</p>
+<ul><li>Seeded RNG and agent origins drawn from real sources: U-Bahn and tram arrivals (GTFS), Zensus residential cells, shopping streets, attractions</li>
+<li>Persona mix: seniors (share taken from the Zensus 65+ grid), commuters, shoppers and tourists, vendor vans at 05:30–07:00</li>
+<li>Dijkstra with per-persona cost: seniors avoid steps, slope over 6% and cobblestones; vans need vehicle edges; rain raises the cost of unsheltered edges</li>
+<li>30-second ticks: arrive → route → stall visits → leave, with drop-outs when patience or walking budget runs out</li>
+<li>Output: the five criteria, persona scores, stall exposure, bottlenecks, trips, heat</li>
+<li>Scenario switches: rainy day, and a Christmas market that blocks the Hauptmarkt and doubles tourist agents</li></ul>
+<p class="small"><b>Done when:</b> one site and scenario runs in under 1.5 s, the same seed gives the same result, and the shortlist sites produce clearly different persona profiles.</p></div>
+
+<div class="card p3"><h3>C · Map, Ranking &amp; What-if UI</h3>
+<p><b>Owns:</b> <code>src/ui/</code></p>
+<ul><li>deck.gl over MapLibre: DOP20 base, extruded LoD2, candidate polygons colored by rank (rejected ones greyed out with a tooltip reason)</li>
+<li>Simulation view: <code>TripsLayer</code> agents by persona, exposure <code>HeatmapLayer</code>, bottleneck markers, time slider</li>
+<li>Ranking table and MarketScore bars that reorder live as the <b>five weight sliders</b> move, plus presets</li>
+<li>What-if bar: Sunny / Rainy / Christmas market</li>
+<li>Persona cards, the Claude brief panel, "Export council brief"</li></ul>
+<p class="small"><b>Done when:</b> moving a weight reorders the ranking in under 100 ms and the map stays at 60 fps with 100 trails.</p></div>
+
+<div class="card p4"><h3>D · Scoring, Claude &amp; Pitch</h3>
+<p><b>Owns:</b> <code>src/score/</code>, <code>server/brief.ts</code>, prompts, the pitch deck</p>
+<ul><li><code>score.ts</code>: normalization, MarketScore, fairness Gini, and a minimum-persona guard that flags any persona below 40</li>
+<li><code>/api/brief</code>: sends the ranking, criteria and active weights to <code>claude-sonnet-5-5</code> with a forced <code>write_recommendation</code> tool (Brief schema). Claude must cite engine numbers and compare against at least two alternatives.</li>
+<li><b>Persona judgments:</b> one Claude call per persona (not per agent) turns that persona's metrics into a first-person verdict for the cards</li><li><b>Propose → simulate → judge loop:</b> Claude proposes a mitigation (a kiosk, a delivery window, a stall layout), B's engine reruns, and the personas judge again</li><li>Re-brief on every what-if, with a short "what changed and why" delta</li>
+<li>Cached briefs per scenario as an offline fallback; key in <code>.env</code></li>
+<li>Integration owner from 17:00; pitch and Method slide</li></ul>
+<p class="small"><b>Done when:</b> every number in the brief matches the input, the brief arrives in under 6 s, and the cached fallback works offline.</p></div>
+</div>
+
+<h2>8. Scoring model</h2>
+<p><b>MarketScore = 0.30·Accessibility + 0.25·Footfall + 0.20·Fairness + 0.15·LocalBusiness + 0.10·Walkability</b> (default weights; adjustable, always normalized to sum to 1)</p>
+<table><tr><th>Criterion (0–100)</th><th>Definition</th><th>Source</th></tr>
+<tr><td>Accessibility</td><td>Share of simulated visitors, weighted by persona, who reach the market within their walking budget. Seniors count only if their route has no steps and stays within 200 m of an elevator or stop. Vendor van access is a hard requirement.</td><td>Simulation + GTFS</td></tr>
+<tr><td>Footfall</td><td>Modeled visitor exposure per Saturday. This is a prediction and is not validated against counts.</td><td>Simulation</td></tr>
+<tr><td>Fairness</td><td>Stall-to-stall evenness: 100 × (1 − Gini of <code>stallExposure</code>). A market where the corner stalls get all the visitors scores low.</td><td>Simulation</td></tr>
+<tr><td>Local business</td><td>Extra footfall past existing shop frontages within 200 m, minus blocked frontage and waste exposure</td><td>Simulation + OSM shops</td></tr>
+<tr><td>Walkability</td><td>Mean route slope, steps, cobblestones and crossing count from visitor origins</td><td>Graph + DGM1</td></tr></table>
+<p>Weight presets for the what-if panel: <i>Accessibility first</i> (0.45/0.20/0.15/0.10/0.10), <i>Trader fairness first</i> (0.20/0.20/0.40/0.10/0.10), <i>Local business first</i> (0.20/0.25/0.10/0.35/0.10).</p>
+
+<h2>9. Before the event</h2>
+<table><tr><th>Task</th><th>Owner</th></tr>
+<tr><td>Run <code>prep/</code>: candidates.json, graph.json, population.json, arrivals.json. Commit only the small outputs; <code>datasets/</code> stays out of git.</td><td>A</td></tr>
+<tr><td>Confirm the former Kaufhof footprint and loading point from LoD2 and the aerial photo</td><td>A</td></tr>
+<tr><td>Repo scaffold (Vite, Tailwind, deck.gl, Vitest) with an empty <code>contracts.ts</code></td><td>C</td></tr>
+<tr><td>Test that the Anthropic API key works with a one-line tool-call script</td><td>D</td></tr></table>
+
+<h2>10. Timeline with gates</h2>
+<table><tr><th style="width:13%">Time</th><th>A · Discovery &amp; Ranking</th><th>B · Twin</th><th>C · UI</th><th>D · Score &amp; Claude</th></tr>
+<tr><td>13:00–13:30<br><b>Kickoff</b></td><td>Check prep outputs load</td><td colspan="2">Freeze <code>contracts.ts</code> with D and write the fixtures</td><td>Agree the default weights and the filter thresholds</td></tr>
+<tr><td>13:30–15:00<br><b>Core</b></td><td>Candidate extraction, indicators, filter with reasons</td><td>RNG, origins, personas, Dijkstra cost functions, tests</td><td>Map, 3D, candidate layer, ranking table on fixtures</td><td>score.ts with Gini and guard; /api/brief on fixtures</td></tr>
+<tr><td colspan="5"><div class="gate"><b>Gate 15:00:</b> real candidate list with filter reasons, the engine runs one site, the UI shows the fixtures end to end, and Claude returns a valid Brief.</div></td></tr>
+<tr><td>15:00–16:30<br><b>Dynamics</b></td><td>Quick ranking and shortlist, then help B with stall slots and capacities</td><td>Stall visits, drop-outs, five criteria, rain and Christmas scenarios</td><td>Trips and heatmap, weight sliders, what-if bar</td><td>What-if re-brief with deltas, cached fallback, pitch draft</td></tr>
+<tr><td>16:30–17:00</td><td colspan="4">Dinner. Run the full pipeline on real data and list the integration bugs.</td></tr>
+<tr><td>17:00–18:00<br><b>Integrate</b></td><td>Video recorder, take 1</td><td>Calibrate and check that the numbers make sense (the results must follow from the data)</td><td>Wire the worker, ranking and brief; polish</td><td>End-to-end runs, bug fixes</td></tr>
+<tr><td colspan="5"><div class="gate"><b>Gate 18:00:</b> code freeze. The full demo path works three times in a row without a crash.</div></td></tr>
+<tr><td>18:00–18:30</td><td>Final video (captions, credits)</td><td>Method slide: definitions and assumptions</td><td>Projector contrast</td><td>Rehearse the pitch three times</td></tr>
+<tr><td>18:30–20:00</td><td colspan="4">Presentations. D presents, C drives the demo, A holds the video fallback, B answers method questions.</td></tr></table>
+
+<h2>11. Demo script (2 minutes)</h2>
+<ol>
+<li><b>0:00, video:</b> the camera flies into the 3D Altstadt. Caption: "The market has to move. Where?"</li>
+<li><b>0:15, Discover and filter:</b> about 20 candidates appear, and the filter greys out most of them with reasons ("no van access", "too small").</li>
+<li><b>0:35, Simulate:</b> the shortlist plus the benchmarks run. Agents stream from U-Bahn exits and homes, vans arrive at 05:30, and the heatmap shows exposure per stall.</li>
+<li><b>1:00, Score:</b> the ranking appears with persona cards. Lorenzkirche wins on footfall and fails on deliveries.</li>
+<li><b>1:15, Claude:</b> "Site B is recommended because… Site C is better at X but worse at Y." Claude proposes a mitigation for the group that loses. The engine reruns it, and the persona cards update their verdicts.</li>
+<li><b>1:35, What-if:</b> switch to Rainy, then to "Trader fairness first". The ranking reorders live, and Claude explains what changed.</li>
+<li><b>1:55, Export the council brief.</b></li></ol>
+
+<h2>12. Risks and fallbacks</h2>
+<table><tr><th>Risk</th><th>Fallback</th></tr>
+<tr><td>Discovery returns odd candidates (parking lots, private courtyards)</td><td>Tag-based exclusions plus a manual allow/deny list in <code>sites.json</code></td></tr>
+<tr><td>"The weights decide the winner"</td><td>Say it openly: choosing the weights is the planner's value judgment. Show that the winner holds under 2 of 3 presets.</td></tr>
+<tr><td>Footfall cannot be validated</td><td>Call it "modeled exposure" everywhere; list the assumptions on the Method slide</td></tr>
+<tr><td>"Isn't this just generative agents?"</td><td>Point to the prior-work table: the movement is rule-based and seeded because LLM mobility is known to be unrealistic, and LLM reasoning is used where it adds value</td></tr><tr><td>Venue Wi-Fi or API outage</td><td>Cached briefs, all data local, the recorded video</td></tr>
+<tr><td>The simulation is late at 15:00</td><td>Ranking and Claude run on the quick indicator score alone; A joins B</td></tr>
+<tr><td>Merge conflicts</td><td>Strict folder ownership, short-lived branches, D merges to <code>main</code></td></tr></table>
+
+<h2>13. Repository layout</h2>
+<pre>claude_imapct_lab/
+├─ datasets/        raw downloads (git-ignored), fetch.sh, zensus/fetch_zensus.py, README.md
+├─ prep/            A: Python converters → public/data
+├─ public/data/     candidates · graph · population · arrivals · mock fixtures
+├─ src/contracts.ts shared types (frozen 13:20)
+├─ src/rank/        A: filter + quick ranking
+├─ src/sim/         B: pedestrian &amp; delivery twin, worker, tests
+├─ src/score/       D: MarketScore, Gini, guards
+├─ src/ui/          C: map, ranking, what-if, cockpit
+├─ server/brief.ts  D: Claude route, prompts, cached briefs
+└─ video/record.ts  A: Playwright capture → urbantwin.mp4</pre>
+</body></html>

@@ -1,0 +1,9 @@
+download Zensus2022_Bevoelkerungszahl.zip
+  population: Zensus2022_Bevoelkerungszahl_100m-Gitter.csv
+  kept 8711 cells
+download Anteil_ab_65-jaehrige_in_Gitterzellen.zip
+  share_65plus: Zensus2022_Anteil_ueber_65_100m-Gitter.csv
+  kept 8711 cells
+download Durchschnittsalter_in_Gitterzellen.zip
+  avg_age: Zensus2022_Durchschnittsalter_100m-Gitter.csv
+  kept 8711 cells
