@@ -30,6 +30,8 @@ export function gridWorld(): World {
   }
   nodes[id(3, 6)].barrier = 'removable_bollard';
   nodes[id(9, 9)].elevator = true;
+  nodes[id(9, 6)].loadingPoint = true;
+  nodes[id(2, 0)].loadingPoint = true;
 
   const edges: GraphEdge[] = [];
   const add = (a: number, b: number, vehicle: boolean, extra: Partial<GraphEdge> = {}) =>

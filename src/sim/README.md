@@ -23,13 +23,28 @@ const result = twin.run(candidate, { scenario: 'RAINY_SAT', seed: 42, mitigation
 ```ts
 { kind: 'kiosk', lng, lat, label? }                    // express stall: commuters 4 min, seniors served there
 { kind: 'delivery_window', unlockRemovableBollards: true }
-{ kind: 'loading_point', lng, lat }                    // extra van loading node, must be ≤ 80 m from the stalls
+{ kind: 'loading_point', lng, lat }                    // designates a vehicle node within 60 m; it must be ≤ 80 m from the stalls
 { kind: 'stall_layout', layout: 'loop' | 'cluster' }   // loop spreads visitors → fairness
 ```
 
 **A (prep):** the engine reads a `World` (`world.ts`): graph nodes and edges with `walk`, `vehicle`, `oneway`, `steps`, `surface`, `sheltered`, `slope` and `widthM`, plus POIs, Zensus cells and GTFS station arrivals. `dev/osmWorld.ts` builds the same shape from `datasets/` and documents the OSM rules. The main gaps for `prep/` to fill:
 - `slope` comes only from OSM `incline` tags. Replace it with DGM1 slope per edge.
 - The Kaufhof polygon in `dev/benchmarks.ts` is approximate. Replace it with the LoD2 outline.
+
+Vans unload at tagged graph nodes with `loadingPoint: true`, supplemented by existing locations in
+`World.loadingPoints[candidateId]`. Coordinates snap to vehicle-legal nodes within 60 m and require
+a carry of at most 80 m. The dev importer recognizes OSM node tags `loading=yes/designated`,
+`amenity=loading_dock`, `parking=loading`, and `parking_space=loading`. `dev/benchmarks.ts` supplies
+Hauptmarkt's existing Waaggasse market access and Kaufhof's rear Peuntgasse dock access. Lorenzkirche
+has no loading fixture and its closest road approach requires a 94 m carry. A loading-point mitigation
+adds a usable unloading destination even if its snapped node was not previously designated. The
+engine uses the same random stream across mitigations to make routing comparisons reproducible.
+
+Commuter pool times represent departures from the station entrance after train arrival and exit time.
+Other visitors' pool times represent preferred market arrivals. Kiosk visits use their full service time.
+The GTFS extractor validates subprocess completion and station arrivals before it atomically replaces
+the dev arrivals file. Real-data integration checks the OSM file, arrivals file, and both Zensus inputs
+before loading the world in `beforeAll`.
 
 ## Model in one paragraph
 

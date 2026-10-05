@@ -10,6 +10,8 @@ export interface GraphNode {
   /** Vehicle barrier at this node. Removable bollards can be unlocked by a delivery-window mitigation. */
   barrier?: 'bollard' | 'removable_bollard' | 'gate';
   elevator?: boolean;
+  /** Designated unloading destination. Vehicle access alone does not permit unloading. */
+  loadingPoint?: boolean;
 }
 
 export interface GraphEdge {
@@ -48,6 +50,8 @@ export interface World {
   pois: Pois;
   population: PopulationCell[];
   stations: StationArrivals[];
+  /** Existing unloading locations by candidate ID; supplements tagged graph nodes. */
+  loadingPoints?: Record<string, LngLat[]>;
   /** Area the Christkindlesmarkt occupies (Hauptmarkt), blocked in CHRISTMAS_MARKET. */
   christmasMarket: LngLat[];
 }
