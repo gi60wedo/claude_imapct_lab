@@ -2,5 +2,5 @@ import { expect, test } from '@playwright/test';
 
 test('loads UrbanTwin', async ({ page }) => {
   await page.goto('/');
-  await expect(page.getByText('UrbanTwin', { exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: /UrbanTwin/ })).toBeVisible();
 });
